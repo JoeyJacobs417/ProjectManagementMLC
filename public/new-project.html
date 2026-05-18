@@ -39,8 +39,7 @@
 
       <div class="form-row">
         <label>Projectmanager<select name="manager_id"><option value="">— Kies —</option></select></label>
-        <label>Moneybird Project-ID <span style="color:var(--danger)">*</span>
-          <input type="text" name="moneybird_project_id" required placeholder="bijv. 12345..."></label>
+        <label>Moneybird Project-ID (optioneel)<input type="text" name="moneybird_project_id" placeholder="bijv. 12345..."></label>
       </div>
 
       <h4>Fases</h4>
@@ -67,6 +66,7 @@
   import { apiGet, apiSend, renderTopbar, toast } from '/app.js';
   await renderTopbar('/new-project.html');
 
+  // Vul manager-dropdown
   const me = await apiGet('/api/auth/me');
   let managers = [];
   if (me.user.role === 'admin') {
@@ -136,11 +136,6 @@
   document.getElementById('projectForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const mbId = (f.get('moneybird_project_id') || '').trim();
-    if (!mbId) {
-      toast('Moneybird Project-ID is verplicht', 'error');
-      return;
-    }
     const phases = [];
     const tbody = document.getElementById('phasesBody');
     for (const tr of tbody.querySelectorAll('tr')) {
@@ -159,7 +154,7 @@
       hourly_rate: Number(f.get('hourly_rate')) || 0,
       exceptions: f.get('exceptions'),
       manager_id: f.get('manager_id') || null,
-      moneybird_project_id: mbId,
+      moneybird_project_id: f.get('moneybird_project_id') || null,
       source_pdf_filename: f.get('source_pdf_filename') || null,
       phases,
     };

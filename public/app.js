@@ -64,6 +64,7 @@ export async function renderTopbar(activePath) {
     { href: '/new-project.html', label: 'Nieuw project' },
   ];
   if (isAdmin) {
+    links.push({ href: '/admin-users.html', label: 'Gebruikers' });
     links.push({ href: '/admin-settings.html', label: 'Instellingen' });
   }
   const topbar = document.getElementById('topbar');
