@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Gebruikers — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <h1>Gebruikers</h1>
+
+  <div class="card-static">
+    <h3>Nieuwe gebruiker aanmaken</h3>
+    <form id="newUserForm" class="form">
+      <div class="form-row">
+        <label>Naam<input type="text" name="name" required></label>
+        <label>E-mail<input type="email" name="email" required></label>
+      </div>
+      <div class="form-row">
+        <label>Rol<select name="role">
+          <option value="projectmanager">Projectmanager</option>
+          <option value="admin">Admin</option>
+        </select></label>
+        <label>Wachtwoord<input type="password" name="password" required></label>
+      </div>
+      <button class="btn btn-primary" type="submit">Aanmaken</button>
+    </form>
+  </div>
+
+  <h2 style="margin-top:2rem">Bestaande gebruikers</h2>
+  <div id="usersTable"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml } from '/app.js';
+  const me = await renderTopbar('/admin-users.html');
+  if (!me || me.role !== 'admin') { location.href = '/dashboard.html'; }
+
+  async function refresh() {
+    const { users } = await apiGet('/api/admin/users');
+    document.getElementById('usersTable').innerHTML = `
+      <table class="table">
+        <thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th>Actief</th><th>Acties</th></tr></thead>
+        <tbody>
+          ${users.map((u) => `
+            <tr>
+              <td>${escapeHtml(u.name)}</td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${u.role}</td>
+              <td>${u.active ? 'Ja' : 'Nee'}</td>
+              <td class="actions">
+                <button class="btn btn-ghost" data-action="toggle" data-id="${u.id}">${u.active ? 'Deactiveren' : 'Activeren'}</button>
+                <input type="password" placeholder="nieuw wachtwoord" data-pw="${u.id}">
+                <button class="btn btn-ghost" data-action="reset" data-id="${u.id}">Reset</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    for (const btn of document.querySelectorAll('button[data-action]')) {
+      btn.onclick = async () => {
+        const id = btn.dataset.id;
+        const action = btn.dataset.action;
+        try {
+          if (action === 'reset') {
+            const pw = document.querySelector(`input[data-pw="${id}"]`).value;
+            if (!pw) { toast('Vul een wachtwoord in', 'error'); return; }
+            await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'reset', password: pw });
+            toast('Wachtwoord aangepast', 'success');
+          } else {
+            await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'toggle' });
+            await refresh();
+          }
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+  }
+  await refresh();
+
+  document.getElementById('newUserForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await apiSend('/api/admin/users', 'POST', {
+        name: f.get('name'),
+        email: f.get('email'),
+        role: f.get('role'),
+        password: f.get('password'),
+      });
+      toast('Gebruiker aangemaakt', 'success');
+      e.target.reset();
+      await refresh();
+    } catch (err) { toast(err.message, 'error'); }
+  });
+</script>
+</body></html>

@@ -1,0 +1,21 @@
+{
+  "name": "project-manager-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Project management app — Moneybird uren, PDF-parsing via Claude, mails via Resend. Deployed op Vercel met Upstash Redis.",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.0",
+    "@anthropic-ai/sdk": "^0.27.0",
+    "resend": "^4.0.0",
+    "bcryptjs": "^2.4.3",
+    "busboy": "^1.6.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "engines": {
+    "node": ">=20.x"
+  }
+}

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Dashboard — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <h1>Dashboard</h1>
+  <p class="subtle">Overzicht van alle projecten en hun urenverbruik.</p>
+  <div id="grid" class="grid"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, progressBarClass } from '/app.js';
+  await renderTopbar('/dashboard.html');
+  const { projects } = await apiGet('/api/projects');
+  const grid = document.getElementById('grid');
+  if (projects.length === 0) {
+    grid.innerHTML = '<p class="subtle">Geen projecten. <a href="/new-project.html">Maak het eerste project aan</a>.</p>';
+  } else {
+    grid.innerHTML = projects.map((p) => {
+      const pct = p.percentage_used;
+      const barWidth = Math.min(pct, 100);
+      return `
+        <a class="card" href="/project.html?id=${encodeURIComponent(p.id)}">
+          <div class="card-header">
+            <h3>${escapeHtml(p.name)}</h3>
+            <span class="badge ${percentageBadgeClass(pct)}">${pct}%</span>
+          </div>
+          <p class="subtle">${escapeHtml(p.description || '—')}</p>
+          <div class="progress">
+            <div class="progress-bar ${progressBarClass(pct)}" style="width:${barWidth}%"></div>
+          </div>
+          <div class="meta">
+            <span><strong>${p.hours_used.toFixed(1)}</strong> / ${(p.available_hours || 0).toFixed(1)} uur</span>
+            <span>PM: ${escapeHtml(p.manager_name || '—')}</span>
+          </div>
+        </a>`;
+    }).join('');
+  }
+</script>
+</body></html>
