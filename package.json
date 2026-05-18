@@ -13,8 +13,7 @@
     "@anthropic-ai/sdk": "^0.27.0",
     "resend": "^4.0.0",
     "bcryptjs": "^2.4.3",
-    "busboy": "^1.6.0",
-    "pdf-parse": "^1.1.1"
+    "busboy": "^1.6.0"
   },
   "engines": {
     "node": ">=20.x"
