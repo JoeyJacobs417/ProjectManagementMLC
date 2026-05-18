@@ -2,6 +2,7 @@
   "name": "project-manager-vercel",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Project management app — Moneybird uren, PDF-parsing via Claude, mails via Resend. Deployed op Vercel met Upstash Redis.",
   "scripts": {
     "dev": "vercel dev",
