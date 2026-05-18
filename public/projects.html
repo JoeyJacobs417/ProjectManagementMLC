@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Projecten — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div class="page-header">
+    <h1>Projecten</h1>
+    <a class="btn btn-primary" href="/new-project.html">+ Nieuw project</a>
+  </div>
+
+  <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
+    <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
+      Filter op status:
+      <select id="statusFilter" style="width:auto">
+        <option value="all">Alle statussen</option>
+        <option value="in_progress">In progress</option>
+        <option value="on_hold">On hold</option>
+        <option value="done">Done</option>
+        <option value="future">Future</option>
+      </select>
+      <span class="subtle" id="filterCount"></span>
+    </label>
+  </div>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
+  await renderTopbar('/projects.html');
+
+  const { projects } = await apiGet('/api/projects');
+
+  const STORAGE_KEY = 'pm_projects_status_filter';
+  const filter = document.getElementById('statusFilter');
+  filter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
+
+  function render() {
+    const value = filter.value;
+    sessionStorage.setItem(STORAGE_KEY, value);
+    const filtered = value === 'all'
+      ? projects
+      : projects.filter((p) => (p.status || 'in_progress') === value);
+
+    document.getElementById('filterCount').textContent = `${filtered.length} van ${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}`;
+
+    const content = document.getElementById('content');
+    if (filtered.length === 0) {
+      content.innerHTML = '<p class="subtle">Geen projecten met deze status.</p>';
+      return;
+    }
+    content.innerHTML = `
+      <table class="table">
+        <thead><tr>
+          <th>Project</th><th>Status</th><th>PM</th><th>Beschikbaar</th><th>Verbruikt</th><th>%</th><th>Uurtarief</th>
+        </tr></thead>
+        <tbody>
+          ${filtered.map((p) => {
+            const status = p.status || 'in_progress';
+            return `
+              <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                <td><strong>${escapeHtml(p.name)}</strong></td>
+                <td><span class="badge status-${status}">${statusLabel(status)}</span></td>
+                <td>${escapeHtml(p.manager_name || '—')}</td>
+                <td>${(p.available_hours || 0).toFixed(1)} u</td>
+                <td>${p.hours_used.toFixed(1)} u</td>
+                <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
+                <td>€ ${(p.hourly_rate || 0).toFixed(2)}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+    content.querySelectorAll('tr.clickable').forEach((tr) => {
+      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    });
+  }
+
+  filter.addEventListener('change', render);
+  render();
+</script>
+</body></html>

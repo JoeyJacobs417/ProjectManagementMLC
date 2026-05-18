@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Planning — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <h1>Planning</h1>
+  <p class="subtle">Per medewerker: actieve projecten, resterende uren en nieuwe toewijzingen.</p>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, statusLabel } from '/app.js';
+  await renderTopbar('/planning.html');
+
+  const { projects } = await apiGet('/api/projects');
+
+  const byEmp = new Map();
+  for (const p of projects) {
+    if (p.status === 'done') continue;
+    for (const t of (p.team || [])) {
+      const key = t.moneybird_user_id;
+      if (!byEmp.has(key)) {
+        byEmp.set(key, { id: key, name: t.name, rows: [], totalOwn: 0, totalRemaining: 0, newCount: 0 });
+      }
+      const rec = byEmp.get(key);
+      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
+      const ownHours = stat ? Number(stat.hours) || 0 : 0;
+      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
+      rec.rows.push({ project: p, ownHours, remaining });
+      rec.totalOwn += ownHours;
+      rec.totalRemaining += remaining;
+      if (p.status === 'future') rec.newCount += 1;
+    }
+  }
+  const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
+
+  const c = document.getElementById('content');
+  if (employees.length === 0) {
+    c.innerHTML = `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten (met status "In progress", "On hold" of "Future"). Wijs medewerkers toe via de project-detail pagina.</p>`;
+    throw new Error('done');
+  }
+
+  c.innerHTML = employees.map((e) => {
+    const order = { in_progress: 0, future: 1, on_hold: 2 };
+    const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
+    return `
+      <div class="card-static" style="margin-bottom:1.25rem">
+        <div class="card-header" style="margin-bottom:.75rem">
+          <h2 style="margin:0">${escapeHtml(e.name)}</h2>
+          <div class="subtle" style="text-align:right">
+            <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
+            <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur project-budget resterend totaal</div>
+            ${e.newCount > 0 ? `<div><span class="badge status-future">${e.newCount} nieuwe ${e.newCount === 1 ? 'toewijzing' : 'toewijzingen'}</span></div>` : ''}
+          </div>
+        </div>
+        <table class="table" style="margin:0">
+          <thead><tr>
+            <th>Project</th>
+            <th>Status</th>
+            <th>Uren door ${escapeHtml(e.name)}</th>
+            <th>Resterend op project</th>
+            <th>Totaal beschikbaar</th>
+          </tr></thead>
+          <tbody>
+            ${rows.map((row) => {
+              const p = row.project;
+              return `
+                <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                  <td><strong>${escapeHtml(p.name)}</strong></td>
+                  <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+                  <td>${row.ownHours.toFixed(1)} u</td>
+                  <td>${row.remaining.toFixed(1)} u</td>
+                  <td>${(Number(p.available_hours) || 0).toFixed(1)} u</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }).join('');
+
+  for (const tr of document.querySelectorAll('tr.clickable')) {
+    tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+  }
+</script>
+</body></html>

@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Project — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, statusLabel } from '/app.js';
+  const me = await renderTopbar('/projects.html');
+
+  const id = new URLSearchParams(location.search).get('id');
+  if (!id) { document.getElementById('content').innerHTML = '<p>Geen project-ID.</p>'; throw new Error('no id'); }
+
+  let project;
+  let managers = [];
+  let chartsRendered = false;
+
+  async function load() {
+    const r = await apiGet(`/api/projects/${encodeURIComponent(id)}`);
+    project = r.project;
+    if (me.role === 'admin' && managers.length === 0) {
+      const u = await apiGet('/api/admin/users').catch(() => ({ users: [] }));
+      managers = (u.users || []).filter((x) => x.active);
+    }
+    render();
+  }
+
+  function render() {
+    const c = document.getElementById('content');
+    const statusOptions = STATUS_OPTIONS.map((o) =>
+      `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+    const managerOptions = `<option value="">— Geen —</option>` + managers.map((m) =>
+      `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`
+    ).join('');
+    const canEditManager = me.role === 'admin';
+
+    c.innerHTML = `
+      <div class="page-header">
+        <div>
+          <div class="card-header-row" style="margin-bottom:.25rem">
+            <h1 style="margin:0">${escapeHtml(project.name)}</h1>
+            <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
+          </div>
+          <p class="subtle">PM: ${escapeHtml(project.manager_name || '—')}</p>
+        </div>
+        <button class="btn btn-primary" id="syncBtn">Synchroniseer Moneybird</button>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card-static">
+          <h3>Beschrijving</h3>
+          <p>${escapeHtml(project.description || '—')}</p>
+          ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
+          ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}</p>` : ''}
+        </div>
+        <div class="card-static">
+          <h3>Uren</h3>
+          <p><strong>Verbruikt:</strong> ${project.hours_used.toFixed(1)} uur</p>
+          <p><strong>Beschikbaar:</strong> ${(project.available_hours || 0).toFixed(1)} uur</p>
+          <p><strong>Uurtarief:</strong> € ${(project.hourly_rate || 0).toFixed(2)}</p>
+          <div class="progress big">
+            <div class="progress-bar ${progressBarClass(project.percentage_used)}" style="width:${Math.min(project.percentage_used, 100)}%"></div>
+          </div>
+          <p><strong>${project.percentage_used}%</strong> verbruikt</p>
+        </div>
+      </div>
+
+      <div class="card-static" style="margin-top:1rem">
+        <h3>Project bewerken</h3>
+        <p class="subtle" style="margin-top:-.5rem">Pas projectgegevens aan — bv. extra uren toevoegen als het budget opgehoogd is.</p>
+        <form id="editForm" class="form">
+          <label>
+            <span class="lbl">Projectnaam</span>
+            <input type="text" name="name" value="${escapeHtml(project.name)}" required>
+          </label>
+
+          <label>Korte beschrijving<textarea name="description" rows="3">${escapeHtml(project.description || '')}</textarea></label>
+
+          <div class="form-row">
+            <label>Beschikbare uren<input type="number" step="0.1" name="available_hours" value="${project.available_hours || 0}"></label>
+            <label>Uurtarief (€)<input type="number" step="0.01" name="hourly_rate" value="${project.hourly_rate || 0}"></label>
+            <label>
+              <span class="lbl">Status</span>
+              <select name="status">${statusOptions}</select>
+            </label>
+          </div>
+
+          <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
+
+          ${canEditManager ? `
+            <label>
+              <span class="lbl">Projectmanager</span>
+              <select name="manager_id">${managerOptions}</select>
+            </label>` : ''}
+
+          <h4>Team — wie werkt er aan dit project?</h4>
+          <p class="subtle" style="margin-top:-.4rem">Selecteer alle medewerkers die aan dit project werken.</p>
+          <div id="teamGrid" class="checkbox-grid"><span class="subtle">Medewerkers laden…</span></div>
+
+          <div style="margin-top:1rem">
+            <button class="btn btn-primary" type="submit">Wijzigingen opslaan</button>
+          </div>
+        </form>
+      </div>
+
+      ${(project.team_stats && project.team_stats.length) ? `
+        <h2>Uren per teamlid (op dit project)</h2>
+        <table class="table">
+          <thead><tr><th>Medewerker</th><th>Uren op dit project</th></tr></thead>
+          <tbody>
+            ${project.team_stats.map((m) => `
+              <tr>
+                <td>${escapeHtml(m.name)}</td>
+                <td>${(Number(m.hours) || 0).toFixed(1)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : ''}
+
+      ${(project.phases && project.phases.length) ? `
+        <h2>Fases</h2>
+        <table class="table">
+          <thead><tr><th>Fase</th><th>Beschrijving</th><th>Uren</th></tr></thead>
+          <tbody>
+            ${project.phases.map((p) => `
+              <tr>
+                <td><strong>${escapeHtml(p.name)}</strong></td>
+                <td>${escapeHtml(p.description || '')}</td>
+                <td>${(Number(p.hours) || 0).toFixed(1)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>` : ''}
+
+      <h2>Uren in de tijd</h2>
+      <div class="card-static"><canvas id="hoursOverTime" height="120"></canvas></div>
+      <h2>Uren per medewerker (alle hours-schrijvers)</h2>
+      <div class="card-static"><canvas id="hoursPerUser" height="120"></canvas></div>
+    `;
+
+    document.getElementById('syncBtn').onclick = async () => {
+      try {
+        const r = await apiSend(`/api/projects/${encodeURIComponent(id)}/sync`, 'POST');
+        toast(`${r.count} entries gesynchroniseerd`, 'success');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) { toast(err.message, 'error'); }
+    };
+
+    const teamGrid = document.getElementById('teamGrid');
+    apiGet('/api/moneybird/employees')
+      .then(({ employees }) => {
+        const checkedIds = new Set((project.team || []).map((t) => t.moneybird_user_id));
+        if (employees.length === 0) {
+          teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden uit Moneybird.</span>';
+          return;
+        }
+        teamGrid.innerHTML = employees.map((e) => `
+          <label>
+            <input type="checkbox" data-emp-id="${e.id}" data-emp-name="${(e.name || '').replace(/"/g, '&quot;')}" ${checkedIds.has(e.id) ? 'checked' : ''}>
+            ${escapeHtml(e.name)}
+          </label>`).join('');
+      })
+      .catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
+
+    document.getElementById('editForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const team = Array.from(document.querySelectorAll('#teamGrid input[type=checkbox]:checked'))
+        .map((cb) => ({ moneybird_user_id: cb.dataset.empId, name: cb.dataset.empName }));
+      const body = {
+        name: f.get('name'),
+        description: f.get('description'),
+        available_hours: Number(f.get('available_hours')) || 0,
+        hourly_rate: Number(f.get('hourly_rate')) || 0,
+        exceptions: f.get('exceptions'),
+        status: f.get('status'),
+        team,
+      };
+      if (canEditManager) body.manager_id = f.get('manager_id') || null;
+      try {
+        await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', body);
+        toast('Opgeslagen', 'success');
+        await load();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    if (!chartsRendered) {
+      chartsRendered = true;
+      apiGet(`/api/projects/${encodeURIComponent(id)}/hours-over-time`).then((d) => {
+        const ctx = document.getElementById('hoursOverTime');
+        if (!ctx) return;
+        const datasets = [
+          { label: 'Uren per dag', data: d.daily, backgroundColor: 'rgba(99,102,241,0.4)', borderColor: '#6366f1', type: 'bar' },
+          { label: 'Cumulatief', data: d.cumulative, borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.1)', fill: true, type: 'line', tension: .3 },
+        ];
+        if (d.available > 0) {
+          datasets.push({
+            label: 'Beschikbaar (max)', data: d.labels.map(() => d.available),
+            borderColor: '#ef4444', borderDash: [6, 6], pointRadius: 0, type: 'line', fill: false,
+          });
+        }
+        new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets }, options: { responsive: true, interaction: { mode: 'index' } } });
+      });
+
+      apiGet(`/api/projects/${encodeURIComponent(id)}/hours-per-user`).then((d) => {
+        const ctx = document.getElementById('hoursPerUser');
+        if (!ctx) return;
+        new Chart(ctx, {
+          type: 'bar',
+          data: { labels: d.labels, datasets: [{ label: 'Uren', data: d.hours, backgroundColor: '#6366f1' }] },
+          options: { indexAxis: 'y', responsive: true },
+        });
+      });
+    }
+  }
+
+  await load();
+</script>
+</body></html>

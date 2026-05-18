@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Dashboard — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <h1>Dashboard</h1>
+  <p class="subtle">Overzicht van alle projecten en hun urenverbruik.</p>
+
+  <h2>Projecten</h2>
+  <div id="grid" class="grid"><p class="subtle">Laden…</p></div>
+
+  <h2 style="margin-top:2.5rem">Medewerkers</h2>
+  <p class="subtle">Prestaties per medewerker over alle projecten waar ze aan zijn toegewezen.</p>
+  <div id="employees"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, progressBarClass, statusLabel } from '/app.js';
+  await renderTopbar('/dashboard.html');
+  const { projects } = await apiGet('/api/projects');
+
+  const grid = document.getElementById('grid');
+  if (projects.length === 0) {
+    grid.innerHTML = '<p class="subtle">Geen projecten. <a href="/new-project.html">Maak het eerste project aan</a>.</p>';
+  } else {
+    grid.innerHTML = projects.map((p) => {
+      const pct = p.percentage_used;
+      const barWidth = Math.min(pct, 100);
+      return `
+        <a class="card" href="/project.html?id=${encodeURIComponent(p.id)}">
+          <div class="card-header">
+            <div class="card-header-row">
+              <h3 style="margin:0">${escapeHtml(p.name)}</h3>
+              <span class="badge status-${p.status || 'in_progress'}">${statusLabel(p.status || 'in_progress')}</span>
+            </div>
+            <span class="badge ${percentageBadgeClass(pct)}">${pct}%</span>
+          </div>
+          <p class="subtle">${escapeHtml(p.description || '—')}</p>
+          <div class="progress">
+            <div class="progress-bar ${progressBarClass(pct)}" style="width:${barWidth}%"></div>
+          </div>
+          <div class="meta">
+            <span><strong>${p.hours_used.toFixed(1)}</strong> / ${(p.available_hours || 0).toFixed(1)} uur</span>
+            <span>PM: ${escapeHtml(p.manager_name || '—')}</span>
+          </div>
+        </a>`;
+    }).join('');
+  }
+
+  // Medewerkers
+  const empMap = new Map();
+  for (const p of projects) {
+    for (const t of (p.team || [])) {
+      const key = t.moneybird_user_id;
+      if (!empMap.has(key)) {
+        empMap.set(key, { id: key, name: t.name, projects: [], totalHours: 0, withinBudget: 0, hasBudget: 0 });
+      }
+      const rec = empMap.get(key);
+      rec.projects.push(p);
+      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
+      rec.totalHours += stat ? Number(stat.hours) || 0 : 0;
+      if (p.within_budget !== null) {
+        rec.hasBudget += 1;
+        if (p.within_budget) rec.withinBudget += 1;
+      }
+    }
+  }
+  const employees = Array.from(empMap.values()).sort((a, b) => b.totalHours - a.totalHours);
+
+  const empEl = document.getElementById('employees');
+  if (employees.length === 0) {
+    empEl.innerHTML = '<p class="subtle">Nog geen medewerkers toegewezen aan projecten. Wijs ze toe via de project-detail pagina.</p>';
+  } else {
+    empEl.innerHTML = `
+      <table class="table">
+        <thead><tr>
+          <th>Medewerker</th><th>Projecten</th><th>Totaal uren</th><th>Binnen budget</th>
+        </tr></thead>
+        <tbody>
+          ${employees.map((e) => {
+            const pctOk = e.hasBudget ? Math.round((e.withinBudget / e.hasBudget) * 100) : null;
+            const badge = pctOk === null ? '—' :
+              `<span class="badge ${pctOk >= 80 ? 'badge-green' : pctOk >= 50 ? 'badge-orange' : 'badge-red'}">${e.withinBudget}/${e.hasBudget} (${pctOk}%)</span>`;
+            return `
+              <tr>
+                <td><strong>${escapeHtml(e.name)}</strong></td>
+                <td>${e.projects.length}</td>
+                <td>${e.totalHours.toFixed(1)} u</td>
+                <td>${badge}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
+  }
+</script>
+</body></html>
