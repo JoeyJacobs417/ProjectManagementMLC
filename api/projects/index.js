@@ -1,5 +1,5 @@
 // GET /api/projects  -> lijst projecten (PM ziet alleen eigen, admin ziet alles)
-// POST /api/projects -> nieuw project aanmaken
+// POST /api/projects -> nieuw project aanmaken (moneybird_project_id is verplicht)
 import { requireUser } from '../../lib/auth.js';
 import { newId } from '../../lib/auth.js';
 import {
@@ -26,7 +26,6 @@ export default async function handler(req, res) {
     if (user.role !== 'admin') {
       projects = projects.filter((p) => p.manager_id === user.id);
     }
-    // Voeg manager-naam en stats toe
     const users = await listUsers();
     const enriched = await Promise.all(
       projects.map(async (p) => {
@@ -43,7 +42,11 @@ export default async function handler(req, res) {
   if (req.method === 'POST') {
     const b = req.body || {};
     if (!b.name) {
-      res.status(400).json({ error: 'name verplicht' });
+      res.status(400).json({ error: 'Projectnaam is verplicht' });
+      return;
+    }
+    if (!b.moneybird_project_id || !String(b.moneybird_project_id).trim()) {
+      res.status(400).json({ error: 'Moneybird project-ID is verplicht' });
       return;
     }
     const project = {
@@ -53,7 +56,7 @@ export default async function handler(req, res) {
       available_hours: Number(b.available_hours) || 0,
       hourly_rate: Number(b.hourly_rate) || 0,
       exceptions: String(b.exceptions || ''),
-      moneybird_project_id: b.moneybird_project_id || null,
+      moneybird_project_id: String(b.moneybird_project_id).trim(),
       source_pdf_filename: b.source_pdf_filename || null,
       manager_id: b.manager_id || null,
       phases: Array.isArray(b.phases)

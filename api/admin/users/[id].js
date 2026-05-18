@@ -1,4 +1,7 @@
-// PATCH /api/admin/users/:id  body: { action: "toggle" } of { action: "reset", password }
+// PATCH /api/admin/users/:id
+//   body: { action: "toggle" }              - activeer/deactiveer
+//   body: { action: "reset", password }     - reset wachtwoord
+//   body: { action: "rename", name }        - hernoem
 import { requireAdmin, hashPassword } from '../../../lib/auth.js';
 import { getUserById, saveUser } from '../../../lib/db.js';
 
@@ -14,7 +17,7 @@ export default async function handler(req, res) {
     res.status(404).json({ error: 'Niet gevonden' });
     return;
   }
-  const { action, password } = req.body || {};
+  const { action, password, name } = req.body || {};
 
   if (action === 'toggle') {
     if (user.id === admin.id) {
@@ -35,6 +38,18 @@ export default async function handler(req, res) {
     user.password_hash = await hashPassword(password);
     await saveUser(user);
     res.status(200).json({ ok: true });
+    return;
+  }
+
+  if (action === 'rename') {
+    const newName = String(name || '').trim();
+    if (!newName) {
+      res.status(400).json({ error: 'name ontbreekt' });
+      return;
+    }
+    user.name = newName;
+    await saveUser(user);
+    res.status(200).json({ ok: true, name: user.name });
     return;
   }
 

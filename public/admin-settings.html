@@ -7,28 +7,65 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <h1>Instellingen</h1>
-  <p class="subtle">Stel de drempelwaardes in voor automatische waarschuwingsmails.</p>
 
+  <!-- Drempels & mails -->
+  <h2>Drempels & meldingen</h2>
+  <p class="subtle">Configureer wanneer er automatische waarschuwingsmails verstuurd worden.</p>
   <div class="card-static">
     <form id="settingsForm" class="form">
+      <h4>Urenverbruik</h4>
       <div class="form-row">
         <label>Waarschuwing bij (%)<input type="number" step="0.1" name="threshold_warning"></label>
         <label>Kritiek bij (%)<input type="number" step="0.1" name="threshold_critical"></label>
         <label>Overschreden bij (%)<input type="number" step="0.1" name="threshold_exceeded"></label>
       </div>
-      <label>Extra mailontvangers (komma-gescheiden)
+
+      <h4>Inactiviteit</h4>
+      <label>Stuur een mail als een persoon weer uren schrijft op een project waar deze persoon
+        <input type="number" step="1" name="inactivity_days" style="width:100px;display:inline-block;margin:0 .4rem"> dagen niets aan heeft gedaan
+      </label>
+
+      <h4>Extra mailontvangers</h4>
+      <label>Komma-gescheiden e-mailadressen die alle waarschuwingen meekrijgen
         <input type="text" name="notify_emails_extra" placeholder="bv. directie@bedrijf.nl, finance@bedrijf.nl"></label>
-      <button class="btn btn-primary" type="submit">Opslaan</button>
+
+      <div><button class="btn btn-primary" type="submit">Opslaan</button></div>
     </form>
   </div>
+
+  <!-- Gebruikers -->
+  <h2 style="margin-top:3rem">Gebruikers</h2>
+
+  <div class="card-static">
+    <h3>Nieuwe gebruiker aanmaken</h3>
+    <form id="newUserForm" class="form">
+      <div class="form-row">
+        <label>Naam<input type="text" name="name" required></label>
+        <label>E-mail<input type="email" name="email" required></label>
+      </div>
+      <div class="form-row">
+        <label>Rol<select name="role">
+          <option value="projectmanager">Projectmanager</option>
+          <option value="admin">Admin</option>
+        </select></label>
+        <label>Wachtwoord<input type="password" name="password" required></label>
+      </div>
+      <button class="btn btn-primary" type="submit">Aanmaken</button>
+    </form>
+  </div>
+
+  <h3 style="margin-top:1.5rem">Bestaande gebruikers</h3>
+  <div id="usersTable"><p class="subtle">Laden…</p></div>
 </main>
+
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml } from '/app.js';
   const me = await renderTopbar('/admin-settings.html');
   if (!me || me.role !== 'admin') location.href = '/dashboard.html';
 
+  // ── Drempels & instellingen ──────────────────────────────────────────
   const { settings } = await apiGet('/api/admin/settings');
-  for (const k of ['threshold_warning', 'threshold_critical', 'threshold_exceeded', 'notify_emails_extra']) {
+  for (const k of ['threshold_warning', 'threshold_critical', 'threshold_exceeded', 'inactivity_days', 'notify_emails_extra']) {
     const el = document.querySelector(`[name=${k}]`);
     if (el) el.value = settings[k] ?? '';
   }
@@ -41,9 +78,77 @@
         threshold_warning: f.get('threshold_warning'),
         threshold_critical: f.get('threshold_critical'),
         threshold_exceeded: f.get('threshold_exceeded'),
+        inactivity_days: f.get('inactivity_days'),
         notify_emails_extra: f.get('notify_emails_extra'),
       });
       toast('Instellingen opgeslagen', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // ── Gebruikers ──────────────────────────────────────────────────────
+  async function refreshUsers() {
+    const { users } = await apiGet('/api/admin/users');
+    document.getElementById('usersTable').innerHTML = `
+      <table class="table">
+        <thead><tr><th>Naam</th><th>E-mail</th><th>Rol</th><th>Actief</th><th>Acties</th></tr></thead>
+        <tbody>
+          ${users.map((u) => `
+            <tr>
+              <td>
+                <input type="text" value="${escapeHtml(u.name)}" data-name="${u.id}" style="min-width:150px">
+                <button class="btn btn-ghost" data-action="rename" data-id="${u.id}">Hernoem</button>
+              </td>
+              <td>${escapeHtml(u.email)}</td>
+              <td>${u.role}</td>
+              <td>${u.active ? 'Ja' : 'Nee'}</td>
+              <td class="actions">
+                <button class="btn btn-ghost" data-action="toggle" data-id="${u.id}">${u.active ? 'Deactiveren' : 'Activeren'}</button>
+                <input type="password" placeholder="nieuw wachtwoord" data-pw="${u.id}">
+                <button class="btn btn-ghost" data-action="reset" data-id="${u.id}">Reset</button>
+              </td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    for (const btn of document.querySelectorAll('button[data-action]')) {
+      btn.onclick = async () => {
+        const id = btn.dataset.id;
+        const action = btn.dataset.action;
+        try {
+          if (action === 'reset') {
+            const pw = document.querySelector(`input[data-pw="${id}"]`).value;
+            if (!pw) { toast('Vul een wachtwoord in', 'error'); return; }
+            await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'reset', password: pw });
+            toast('Wachtwoord aangepast', 'success');
+          } else if (action === 'rename') {
+            const name = document.querySelector(`input[data-name="${id}"]`).value.trim();
+            if (!name) { toast('Naam mag niet leeg zijn', 'error'); return; }
+            await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'rename', name });
+            toast('Naam aangepast', 'success');
+            await refreshUsers();
+          } else {
+            await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'toggle' });
+            await refreshUsers();
+          }
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+  }
+  await refreshUsers();
+
+  document.getElementById('newUserForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await apiSend('/api/admin/users', 'POST', {
+        name: f.get('name'),
+        email: f.get('email'),
+        role: f.get('role'),
+        password: f.get('password'),
+      });
+      toast('Gebruiker aangemaakt', 'success');
+      e.target.reset();
+      await refreshUsers();
     } catch (err) { toast(err.message, 'error'); }
   });
 </script>
