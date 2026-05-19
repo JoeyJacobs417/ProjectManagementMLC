@@ -24,11 +24,43 @@
         <input type="number" step="1" name="inactivity_days" style="width:100px;display:inline-block;margin:0 .4rem"> dagen niets aan heeft gedaan
       </label>
 
-      <h4>Extra mailontvangers</h4>
-      <label>Komma-gescheiden e-mailadressen die alle waarschuwingen meekrijgen
+      <h4>Extra mailontvangers (alle waarschuwingen)</h4>
+      <label>Komma-gescheiden e-mailadressen
         <input type="text" name="notify_emails_extra" placeholder="bv. directie@bedrijf.nl, finance@bedrijf.nl"></label>
 
-      <div><button class="btn btn-primary" type="submit">Opslaan</button></div>
+      <h4>Periodieke rapportage</h4>
+      <p class="subtle" style="margin-top:-.4rem">Verstuurt automatisch een samenvatting van alle "In progress" projecten met urenstatus.</p>
+      <div class="form-row">
+        <label>Periode
+          <select name="report_period">
+            <option value="off">Uit</option>
+            <option value="weekly">Wekelijks (maandag)</option>
+            <option value="monthly">Maandelijks (1e van de maand)</option>
+          </select>
+        </label>
+        <label>Ontvangers (komma-gescheiden)
+          <input type="text" name="report_recipients" placeholder="bv. joey@bedrijf.nl, finance@bedrijf.nl">
+        </label>
+        <label></label>
+      </div>
+      <div>
+        <button class="btn btn-ghost" type="button" id="testReportBtn">Verstuur test-rapportage nu</button>
+      </div>
+
+      <h4>PDF-prompt voor Claude</h4>
+      <p class="subtle" style="margin-top:-.4rem">Standaardinstructie bij het uitlezen van project-PDF's. Wordt op de "Nieuw project" pagina als startwaarde gebruikt; je kunt 'm daar per upload nog tweaken. Laat leeg om de ingebakken default te gebruiken.</p>
+      <label><textarea name="pdf_prompt" rows="8" placeholder="Leeg = ingebakken default..."></textarea></label>
+
+      <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Alles opslaan</button></div>
+    </form>
+  </div>
+
+  <h2 style="margin-top:3rem">Capaciteit per medewerker</h2>
+  <p class="subtle">Hoeveel uur per week kan iedere medewerker schrijven? Wordt gebruikt op de Planning-pagina om vooruit te schatten hoeveel weken werk er nog ligt.</p>
+  <div class="card-static">
+    <form id="capacitiesForm" class="form">
+      <div id="capacitiesGrid"><span class="subtle">Medewerkers laden…</span></div>
+      <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Capaciteiten opslaan</button></div>
     </form>
   </div>
 
@@ -61,12 +93,18 @@
   const me = await renderTopbar('/admin-settings.html');
   if (!me || me.role !== 'admin') location.href = '/dashboard.html';
 
+  // ── Settings laden ──────────────────────────────────────────────
   const { settings } = await apiGet('/api/admin/settings');
-  for (const k of ['threshold_warning', 'threshold_critical', 'threshold_exceeded', 'inactivity_days', 'notify_emails_extra']) {
+  for (const k of [
+    'threshold_warning', 'threshold_critical', 'threshold_exceeded',
+    'inactivity_days', 'notify_emails_extra',
+    'report_period', 'report_recipients', 'pdf_prompt',
+  ]) {
     const el = document.querySelector(`[name=${k}]`);
     if (el) el.value = settings[k] ?? '';
   }
 
+  // ── Settings opslaan ────────────────────────────────────────────
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
@@ -77,11 +115,64 @@
         threshold_exceeded: f.get('threshold_exceeded'),
         inactivity_days: f.get('inactivity_days'),
         notify_emails_extra: f.get('notify_emails_extra'),
+        report_period: f.get('report_period'),
+        report_recipients: f.get('report_recipients'),
+        pdf_prompt: f.get('pdf_prompt'),
       });
       toast('Instellingen opgeslagen', 'success');
     } catch (err) { toast(err.message, 'error'); }
   });
 
+  // ── Test rapportage ─────────────────────────────────────────────
+  document.getElementById('testReportBtn').onclick = async () => {
+    try {
+      const r = await apiSend('/api/admin/settings?action=test_report', 'POST', {});
+      if (r.sent) toast(`Test-rapportage verstuurd naar ${r.recipients.length} ontvanger(s) (${r.count} projecten).`, 'success');
+      else toast(`Niet verstuurd: ${r.reason}`, 'info');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  // ── Capaciteiten ────────────────────────────────────────────────
+  const { employees } = await apiGet('/api/moneybird/employees').catch(() => ({ employees: [] }));
+  const caps = settings.employee_capacities || {};
+  const capGrid = document.getElementById('capacitiesGrid');
+  if (employees.length === 0) {
+    capGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden.</span>';
+  } else {
+    capGrid.innerHTML = `
+      <table class="table" style="margin:0">
+        <thead><tr><th>Medewerker</th><th style="width:160px">Uur per week</th></tr></thead>
+        <tbody>
+          ${employees.map((e) => `
+            <tr>
+              <td>${escapeHtml(e.name)}</td>
+              <td><input type="number" step="0.5" min="0" data-cap-id="${e.id}" value="${caps[e.id] ?? ''}" placeholder="bv. 40"></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  document.getElementById('capacitiesForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const newCaps = {};
+    for (const input of document.querySelectorAll('input[data-cap-id]')) {
+      const id = input.dataset.capId;
+      const val = input.value.trim();
+      if (val === '') continue; // leeg = niet ingesteld
+      const num = Number(val);
+      if (Number.isFinite(num) && num >= 0) newCaps[id] = num;
+    }
+    try {
+      await apiSend('/api/admin/settings', 'POST', {
+        ...settings,
+        employee_capacities: newCaps,
+      });
+      toast('Capaciteiten opgeslagen', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // ── Gebruikers ──────────────────────────────────────────────────
   async function refreshUsers() {
     const { users } = await apiGet('/api/admin/users');
     document.getElementById('usersTable').innerHTML = `

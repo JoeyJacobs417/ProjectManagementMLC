@@ -1,5 +1,5 @@
 // GET   /api/projects/:id - detail incl. stats
-// PATCH /api/projects/:id - update editable fields (status, team, name, description, ...)
+// PATCH /api/projects/:id - update editable fields (status, team, name, description, module, contacts...)
 import { requireUser } from '../../../lib/auth.js';
 import {
   getProject,
@@ -9,6 +9,7 @@ import {
 } from '../../../lib/db.js';
 
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
+const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 const EDITABLE_FIELDS = [
   'name',
   'description',
@@ -34,6 +35,19 @@ function normalizeTeam(input) {
   return out;
 }
 
+function normalizeContacts(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const c of input) {
+    if (!c) continue;
+    const name = String(c.name || '').trim();
+    const email = String(c.email || '').trim();
+    if (!name && !email) continue;
+    out.push({ name, email });
+  }
+  return out;
+}
+
 async function buildDetail(project) {
   const entries = await listTimeEntries(project.id);
   const hoursUsed = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
@@ -50,6 +64,8 @@ async function buildDetail(project) {
   return {
     ...project,
     status: project.status || 'in_progress',
+    module: project.module || '',
+    contacts: Array.isArray(project.contacts) ? project.contacts : [],
     team,
     team_stats,
     hours_used: hoursUsed,
@@ -86,6 +102,13 @@ export default async function handler(req, res) {
     if (b.status !== undefined) {
       const s = String(b.status).toLowerCase();
       project.status = VALID_STATUSES.includes(s) ? s : project.status || 'in_progress';
+    }
+    if (b.module !== undefined) {
+      const m = String(b.module || '').trim();
+      project.module = VALID_MODULES.includes(m) ? m : '';
+    }
+    if (b.contacts !== undefined) {
+      project.contacts = normalizeContacts(b.contacts);
     }
     if (b.team !== undefined) {
       project.team = normalizeTeam(b.team);

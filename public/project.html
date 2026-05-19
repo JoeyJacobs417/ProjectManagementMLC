@@ -16,6 +16,8 @@
   const id = new URLSearchParams(location.search).get('id');
   if (!id) { document.getElementById('content').innerHTML = '<p>Geen project-ID.</p>'; throw new Error('no id'); }
 
+  const MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
+
   let project;
   let managers = [];
   let chartsRendered = false;
@@ -35,10 +37,19 @@
     const statusOptions = STATUS_OPTIONS.map((o) =>
       `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`
     ).join('');
+    const moduleOptions = `<option value="">— Kies module —</option>` + MODULES.map((m) =>
+      `<option value="${m}" ${m === project.module ? 'selected' : ''}>${m}</option>`
+    ).join('');
     const managerOptions = `<option value="">— Geen —</option>` + managers.map((m) =>
       `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`
     ).join('');
     const canEditManager = me.role === 'admin';
+    const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '' }]).map((c) => `
+      <tr>
+        <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
+        <td><input type="email" data-contact="email" value="${escapeHtml(c.email || '')}"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
+      </tr>`).join('');
 
     c.innerHTML = `
       <div class="page-header">
@@ -46,6 +57,7 @@
           <div class="card-header-row" style="margin-bottom:.25rem">
             <h1 style="margin:0">${escapeHtml(project.name)}</h1>
             <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
+            ${project.module ? `<span class="badge badge-blue">${escapeHtml(project.module)}</span>` : ''}
           </div>
           <p class="subtle">PM: ${escapeHtml(project.manager_name || '—')}</p>
         </div>
@@ -58,6 +70,13 @@
           <p>${escapeHtml(project.description || '—')}</p>
           ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
           ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}</p>` : ''}
+          ${(project.contacts && project.contacts.length) ? `
+            <h3>Contactpersonen</h3>
+            <ul style="margin:.25rem 0 0; padding-left:1.2rem">
+              ${project.contacts.map((c) => `
+                <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}</li>
+              `).join('')}
+            </ul>` : ''}
         </div>
         <div class="card-static">
           <h3>Uren</h3>
@@ -91,13 +110,27 @@
             </label>
           </div>
 
+          <div class="form-row">
+            <label>
+              <span class="lbl">Module</span>
+              <select name="module">${moduleOptions}</select>
+            </label>
+            ${canEditManager ? `
+              <label>
+                <span class="lbl">Projectmanager</span>
+                <select name="manager_id">${managerOptions}</select>
+              </label>` : '<label></label>'}
+            <label></label>
+          </div>
+
           <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
 
-          ${canEditManager ? `
-            <label>
-              <span class="lbl">Projectmanager</span>
-              <select name="manager_id">${managerOptions}</select>
-            </label>` : ''}
+          <h4>Contactpersonen bij de klant</h4>
+          <table class="table">
+            <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+            <tbody id="contactsBody">${contactRows}</tbody>
+          </table>
+          <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
           <h4>Team — wie werkt er aan dit project?</h4>
           <p class="subtle" style="margin-top:-.4rem">Selecteer alle medewerkers die aan dit project werken.</p>
@@ -166,11 +199,41 @@
       })
       .catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
 
+    // Contacten beheer
+    function bindContactRow(tr) {
+      const removeBtn = tr.querySelector('[data-remove]');
+      if (removeBtn) {
+        removeBtn.onclick = () => {
+          const tbody = document.getElementById('contactsBody');
+          if (tbody.children.length > 1) tr.remove();
+          else tr.querySelectorAll('input').forEach((i) => (i.value = ''));
+        };
+      }
+    }
+    document.querySelectorAll('#contactsBody tr').forEach(bindContactRow);
+    document.getElementById('addContact').onclick = () => {
+      const tbody = document.getElementById('contactsBody');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" data-contact="name"></td>
+        <td><input type="email" data-contact="email"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
+      tbody.appendChild(tr);
+      bindContactRow(tr);
+    };
+
     document.getElementById('editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
       const team = Array.from(document.querySelectorAll('#teamGrid input[type=checkbox]:checked'))
         .map((cb) => ({ moneybird_user_id: cb.dataset.empId, name: cb.dataset.empName }));
+      const contacts = [];
+      for (const tr of document.querySelectorAll('#contactsBody tr')) {
+        const name = tr.querySelector('[data-contact=name]').value.trim();
+        const email = tr.querySelector('[data-contact=email]').value.trim();
+        if (!name && !email) continue;
+        contacts.push({ name, email });
+      }
       const body = {
         name: f.get('name'),
         description: f.get('description'),
@@ -178,6 +241,8 @@
         hourly_rate: Number(f.get('hourly_rate')) || 0,
         exceptions: f.get('exceptions'),
         status: f.get('status'),
+        module: f.get('module'),
+        contacts,
         team,
       };
       if (canEditManager) body.manager_id = f.get('manager_id') || null;

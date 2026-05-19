@@ -9,14 +9,32 @@
   <h1>Planning</h1>
   <p class="subtle">Per medewerker: actieve projecten, resterende uren en nieuwe toewijzingen.</p>
 
+  <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
+    <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
+      Filter op medewerker:
+      <select id="empFilter" style="width:auto; min-width:240px">
+        <option value="all">Alle medewerkers</option>
+      </select>
+      <span class="subtle" id="filterCount"></span>
+    </label>
+  </div>
+
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
   import { apiGet, renderTopbar, escapeHtml, statusLabel } from '/app.js';
-  await renderTopbar('/planning.html');
+  const me = await renderTopbar('/planning.html');
 
-  const { projects } = await apiGet('/api/projects');
+  const [{ projects }, settingsResp] = await Promise.all([
+    apiGet('/api/projects'),
+    // settings alleen leesbaar voor admin — anders gewoon zonder capaciteiten verder
+    me?.role === 'admin'
+      ? apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {} } }))
+      : Promise.resolve({ settings: { employee_capacities: {} } }),
+  ]);
+  const capacities = settingsResp.settings.employee_capacities || {};
 
+  // Groepeer per medewerker
   const byEmp = new Map();
   for (const p of projects) {
     if (p.status === 'done') continue;
@@ -37,52 +55,93 @@
   }
   const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
 
-  const c = document.getElementById('content');
-  if (employees.length === 0) {
-    c.innerHTML = `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten (met status "In progress", "On hold" of "Future"). Wijs medewerkers toe via de project-detail pagina.</p>`;
-    throw new Error('done');
+  // Vul filter dropdown
+  const empFilter = document.getElementById('empFilter');
+  for (const e of employees) {
+    const o = document.createElement('option');
+    o.value = e.id;
+    o.textContent = e.name;
+    empFilter.appendChild(o);
+  }
+  const STORAGE_KEY = 'pm_planning_emp_filter';
+  empFilter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
+
+  function formatWeeks(remaining, perWeek) {
+    if (!perWeek || perWeek <= 0) return '<span class="subtle">capaciteit niet ingesteld</span>';
+    const weeks = remaining / perWeek;
+    if (weeks < 0.1) return '< 0,1 week';
+    return `${weeks.toFixed(1)} weken werk`;
   }
 
-  c.innerHTML = employees.map((e) => {
-    const order = { in_progress: 0, future: 1, on_hold: 2 };
-    const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
-    return `
-      <div class="card-static" style="margin-bottom:1.25rem">
-        <div class="card-header" style="margin-bottom:.75rem">
-          <h2 style="margin:0">${escapeHtml(e.name)}</h2>
-          <div class="subtle" style="text-align:right">
-            <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
-            <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur project-budget resterend totaal</div>
-            ${e.newCount > 0 ? `<div><span class="badge status-future">${e.newCount} nieuwe ${e.newCount === 1 ? 'toewijzing' : 'toewijzingen'}</span></div>` : ''}
-          </div>
-        </div>
-        <table class="table" style="margin:0">
-          <thead><tr>
-            <th>Project</th>
-            <th>Status</th>
-            <th>Uren door ${escapeHtml(e.name)}</th>
-            <th>Resterend op project</th>
-            <th>Totaal beschikbaar</th>
-          </tr></thead>
-          <tbody>
-            ${rows.map((row) => {
-              const p = row.project;
-              return `
-                <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
-                  <td><strong>${escapeHtml(p.name)}</strong></td>
-                  <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
-                  <td>${row.ownHours.toFixed(1)} u</td>
-                  <td>${row.remaining.toFixed(1)} u</td>
-                  <td>${(Number(p.available_hours) || 0).toFixed(1)} u</td>
-                </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-      </div>`;
-  }).join('');
+  function render() {
+    const value = empFilter.value;
+    sessionStorage.setItem(STORAGE_KEY, value);
+    const shown = value === 'all' ? employees : employees.filter((e) => e.id === value);
 
-  for (const tr of document.querySelectorAll('tr.clickable')) {
-    tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    document.getElementById('filterCount').textContent =
+      `${shown.length} van ${employees.length} medewerker${employees.length === 1 ? '' : 's'}`;
+
+    const c = document.getElementById('content');
+    if (shown.length === 0) {
+      c.innerHTML = `<p class="subtle">Geen medewerkers gevonden voor deze filter.</p>`;
+      return;
+    }
+
+    c.innerHTML = shown.map((e) => {
+      const order = { in_progress: 0, future: 1, on_hold: 2 };
+      const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
+      const cap = Number(capacities[e.id]) || 0;
+      const weeksHtml = formatWeeks(e.totalRemaining, cap);
+      return `
+        <div class="card-static" style="margin-bottom:1.25rem">
+          <div class="card-header" style="margin-bottom:.75rem">
+            <h2 style="margin:0">${escapeHtml(e.name)}</h2>
+            <div class="subtle" style="text-align:right">
+              <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
+              <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur project-budget resterend</div>
+              <div>Capaciteit: <strong>${cap > 0 ? cap + ' uur/week' : '—'}</strong> · ${weeksHtml}</div>
+              ${e.newCount > 0 ? `<div><span class="badge status-future">${e.newCount} nieuwe ${e.newCount === 1 ? 'toewijzing' : 'toewijzingen'}</span></div>` : ''}
+            </div>
+          </div>
+          <table class="table" style="margin:0">
+            <thead><tr>
+              <th>Project</th>
+              <th>Module</th>
+              <th>Status</th>
+              <th>Uren door ${escapeHtml(e.name)}</th>
+              <th>Resterend op project</th>
+              <th>Totaal</th>
+            </tr></thead>
+            <tbody>
+              ${rows.map((row) => {
+                const p = row.project;
+                return `
+                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td>${p.module ? `<span class="badge badge-blue">${escapeHtml(p.module)}</span>` : '<span class="subtle">—</span>'}</td>
+                    <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+                    <td>${row.ownHours.toFixed(1)} u</td>
+                    <td>${row.remaining.toFixed(1)} u</td>
+                    <td>${(Number(p.available_hours) || 0).toFixed(1)} u</td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }).join('');
+
+    for (const tr of c.querySelectorAll('tr.clickable')) {
+      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    }
+  }
+
+  empFilter.addEventListener('change', render);
+
+  if (employees.length === 0) {
+    document.getElementById('content').innerHTML =
+      `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten (met status "In progress", "On hold" of "Future"). Wijs medewerkers toe via de project-detail pagina.</p>`;
+  } else {
+    render();
   }
 </script>
 </body></html>

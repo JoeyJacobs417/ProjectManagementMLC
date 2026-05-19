@@ -14,6 +14,16 @@
       fases, beschrijving, uurtarief en uitzonderingen uit.</p>
     <form id="pdfForm" class="form">
       <label>PDF-bestand<input type="file" name="pdf" accept="application/pdf" required></label>
+
+      <label>
+        <span class="lbl">Prompt / instructies voor Claude</span>
+        <textarea name="prompt" id="promptField" rows="10"></textarea>
+      </label>
+      <p class="subtle" style="margin-top:-.5rem">
+        Tweak deze tekst als je offerte een afwijkend formaat heeft. Wordt onthouden voor je volgende upload.
+        <a href="#" id="resetPromptBtn">Herstel naar default</a>.
+      </p>
+
       <button class="btn btn-primary" type="submit">Lees PDF in met Claude</button>
     </form>
     <p class="subtle" style="margin-top:1rem">
@@ -43,9 +53,19 @@
         </label>
       </div>
 
-      <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3"></textarea></label>
-
       <div class="form-row">
+        <label>
+          <span class="lbl">Module</span>
+          <select name="module" id="moduleField">
+            <option value="">— Kies module —</option>
+            <option value="PowerImprove">PowerImprove</option>
+            <option value="PowerClass">PowerClass</option>
+            <option value="PowerText">PowerText</option>
+            <option value="PowerImage">PowerImage</option>
+            <option value="PowerRelate">PowerRelate</option>
+            <option value="Project">Project</option>
+          </select>
+        </label>
         <label>Projectmanager<select name="manager_id"><option value="">— Kies —</option></select></label>
         <label>
           <span class="lbl">Moneybird project <span class="required">*</span></span>
@@ -53,8 +73,23 @@
             <option value="">— Moneybird-projecten laden —</option>
           </select>
         </label>
-        <label></label>
       </div>
+
+      <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3"></textarea></label>
+
+      <h4>Contactpersonen bij de klant</h4>
+      <p class="subtle" style="margin-top:-.5rem">Naam + e-mailadres. Meerdere mogelijk.</p>
+      <table class="table">
+        <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+        <tbody id="contactsBody">
+          <tr>
+            <td><input type="text" data-contact="name"></td>
+            <td><input type="email" data-contact="email"></td>
+            <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
       <h4>Team — wie werkt er aan dit project?</h4>
       <p class="subtle" style="margin-top:-.5rem">Selecteer alle medewerkers die aan dit project werken (meerdere mogelijk).</p>
@@ -84,8 +119,9 @@
 </main>
 <script type="module">
   import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS } from '/app.js';
-  await renderTopbar('/projects.html');
+  const me = await renderTopbar('/projects.html');
 
+  // Status dropdown
   const statusSel = document.getElementById('statusField');
   for (const opt of STATUS_OPTIONS) {
     const o = document.createElement('option');
@@ -94,13 +130,43 @@
     statusSel.appendChild(o);
   }
 
-  const me = await apiGet('/api/auth/me');
+  // PDF prompt: probeer settings (admin), val terug op default uit lib/claude.js (gedupliceerd hier).
+  const DEFAULT_PDF_PROMPT = `Lees de bijgevoegde PDF (een offerte of projectvoorstel) en haal de volgende informatie eruit:
+
+- "available_hours": totaal aantal beschikbare uren (getal, anders 0)
+- "hourly_rate": uurtarief in euro (getal, anders 0)
+- "description": korte beschrijving van wat we voor de klant doen (max 3 zinnen)
+- "exceptions": uitzonderingen / kortingen / bijzondere afspraken (lege string als niets)
+- "phases": lijst van fases, elk met "name", "description", "hours"
+
+Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
+  const PROMPT_STORAGE_KEY = 'pm_pdf_prompt_user';
+  const promptField = document.getElementById('promptField');
+
+  let savedPrompt = '';
+  if (me.role === 'admin') {
+    try {
+      const r = await apiGet('/api/admin/settings');
+      savedPrompt = (r.settings.pdf_prompt || '').trim();
+    } catch {}
+  }
+  const userOverride = sessionStorage.getItem(PROMPT_STORAGE_KEY);
+  promptField.value = userOverride || savedPrompt || DEFAULT_PDF_PROMPT;
+
+  document.getElementById('resetPromptBtn').onclick = (e) => {
+    e.preventDefault();
+    promptField.value = savedPrompt || DEFAULT_PDF_PROMPT;
+    sessionStorage.removeItem(PROMPT_STORAGE_KEY);
+    toast('Prompt teruggezet naar standaard', 'info');
+  };
+
+  // Managers
   let managers = [];
-  if (me.user.role === 'admin') {
+  if (me.role === 'admin') {
     const { users } = await apiGet('/api/admin/users').catch(() => ({ users: [] }));
     managers = users.filter((u) => u.active);
   } else {
-    managers = [me.user];
+    managers = [me];
   }
   const sel = document.querySelector('select[name=manager_id]');
   managers.forEach((m) => {
@@ -110,6 +176,7 @@
     sel.appendChild(opt);
   });
 
+  // Moneybird projecten
   const mbSel = document.getElementById('mbField');
   apiGet('/api/moneybird/projects')
     .then(({ projects }) => {
@@ -124,11 +191,12 @@
       mbSel.innerHTML = `<option value="">Fout: ${err.message}</option>`;
     });
 
+  // Medewerkers
   const teamGrid = document.getElementById('teamGrid');
   apiGet('/api/moneybird/employees')
     .then(({ employees }) => {
       if (employees.length === 0) {
-        teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden. Synchroniseer eerst een project om medewerkers te laden, of geef je Moneybird-token toegang tot Users.</span>';
+        teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden uit Moneybird.</span>';
         return;
       }
       teamGrid.innerHTML = employees.map((e) => `
@@ -140,6 +208,31 @@
     .catch((err) => {
       teamGrid.innerHTML = `<span class="subtle">Fout bij laden: ${err.message}</span>`;
     });
+
+  // Contactpersonen rij-beheer
+  function bindContactRow(tr) {
+    const removeBtn = tr.querySelector('[data-remove]');
+    if (removeBtn) {
+      removeBtn.onclick = () => {
+        const tbody = document.getElementById('contactsBody');
+        if (tbody.children.length > 1) tr.remove();
+        else {
+          tr.querySelectorAll('input').forEach((i) => (i.value = ''));
+        }
+      };
+    }
+  }
+  document.querySelectorAll('#contactsBody tr').forEach(bindContactRow);
+  document.getElementById('addContact').onclick = () => {
+    const tbody = document.getElementById('contactsBody');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="text" data-contact="name"></td>
+      <td><input type="email" data-contact="email"></td>
+      <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
+    tbody.appendChild(tr);
+    bindContactRow(tr);
+  };
 
   function fillForm(parsed) {
     document.getElementById('step1').classList.add('hidden');
@@ -169,8 +262,15 @@
 
   document.getElementById('pdfForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const fd = new FormData(e.target);
-    if (!fd.get('pdf') || !fd.get('pdf').name) { toast('Selecteer een PDF', 'error'); return; }
+    const file = e.target.querySelector('input[name=pdf]').files[0];
+    if (!file) { toast('Selecteer een PDF', 'error'); return; }
+    const fd = new FormData();
+    fd.append('pdf', file);
+    const promptValue = promptField.value.trim();
+    if (promptValue) {
+      fd.append('prompt', promptValue);
+      sessionStorage.setItem(PROMPT_STORAGE_KEY, promptValue);
+    }
     toast('PDF wordt door Claude gelezen…', 'info');
     try {
       const parsed = await apiSend('/api/projects/parse-pdf', 'POST', fd, true);
@@ -200,9 +300,16 @@
     const team = Array.from(document.querySelectorAll('#teamGrid input[type=checkbox]:checked'))
       .map((cb) => ({ moneybird_user_id: cb.dataset.empId, name: cb.dataset.empName }));
 
+    const contacts = [];
+    for (const tr of document.querySelectorAll('#contactsBody tr')) {
+      const name = tr.querySelector('[data-contact=name]').value.trim();
+      const email = tr.querySelector('[data-contact=email]').value.trim();
+      if (!name && !email) continue;
+      contacts.push({ name, email });
+    }
+
     const phases = [];
-    const tbody = document.getElementById('phasesBody');
-    for (const tr of tbody.querySelectorAll('tr')) {
+    for (const tr of document.querySelectorAll('#phasesBody tr')) {
       const name = tr.querySelector('[name=phase_name]').value.trim();
       if (!name) continue;
       phases.push({
@@ -211,6 +318,7 @@
         hours: Number(tr.querySelector('[name=phase_hours]').value) || 0,
       });
     }
+
     const body = {
       name: f.get('name'),
       description: f.get('description'),
@@ -221,6 +329,8 @@
       moneybird_project_id: mbId,
       source_pdf_filename: f.get('source_pdf_filename') || null,
       status: f.get('status') || 'in_progress',
+      module: f.get('module') || '',
+      contacts,
       team,
       phases,
     };

@@ -1,5 +1,5 @@
 // GET /api/projects  -> lijst projecten (PM ziet alleen eigen, admin ziet alles)
-// POST /api/projects -> nieuw project aanmaken (moneybird_project_id verplicht)
+// POST /api/projects -> nieuw project aanmaken
 import { requireUser } from '../../lib/auth.js';
 import { newId } from '../../lib/auth.js';
 import {
@@ -10,6 +10,7 @@ import {
 } from '../../lib/db.js';
 
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
+const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
@@ -27,9 +28,27 @@ function normalizeTeam(input) {
   return out;
 }
 
+function normalizeContacts(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const c of input) {
+    if (!c) continue;
+    const name = String(c.name || '').trim();
+    const email = String(c.email || '').trim();
+    if (!name && !email) continue;
+    out.push({ name, email });
+  }
+  return out;
+}
+
 function normalizeStatus(s) {
   const v = String(s || 'in_progress').toLowerCase();
   return VALID_STATUSES.includes(v) ? v : 'in_progress';
+}
+
+function normalizeModule(m) {
+  const v = String(m || '').trim();
+  return VALID_MODULES.includes(v) ? v : '';
 }
 
 async function withStats(project) {
@@ -47,6 +66,8 @@ async function withStats(project) {
   return {
     ...project,
     status: project.status || 'in_progress',
+    module: project.module || '',
+    contacts: Array.isArray(project.contacts) ? project.contacts : [],
     team,
     team_stats: teamStats,
     hours_used: hoursUsed,
@@ -99,6 +120,8 @@ export default async function handler(req, res) {
       manager_id: b.manager_id || null,
       team: normalizeTeam(b.team),
       status: normalizeStatus(b.status),
+      module: normalizeModule(b.module),
+      contacts: normalizeContacts(b.contacts),
       phases: Array.isArray(b.phases)
         ? b.phases
             .filter((ph) => ph && ph.name)
