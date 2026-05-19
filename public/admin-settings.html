@@ -30,7 +30,7 @@
       </label>
 
       <h4>Ontvangers van urenverbruik-, inactiviteits- en deadline-mails</h4>
-      <p class="subtle" style="margin-top:-.5rem">Deze mails gaan altijd naar de <strong>projectmanager</strong> + alle <strong>actieve admins</strong>. Bij <em>urenverbruik</em>-mails worden ook opt-in klantcontacten meegenomen (zie project-pagina). Hieronder kun je extra mailadressen opgeven.</p>
+      <p class="subtle" style="margin-top:-.5rem">Deze mails gaan altijd naar de <strong>projectmanager</strong> + alle <strong>actieve admins</strong>. Bij <em>urenverbruik</em>-mails worden ook opt-in klantcontacten + teamleden uit Moneybird meegenomen.</p>
       <label>Extra ontvangers (komma-gescheiden)
         <input type="text" name="notify_emails_extra" placeholder="bv. directie@bedrijf.nl, finance@bedrijf.nl"></label>
       <div class="subtle" id="recipientsPreview" style="background:var(--bg-soft); padding:.6rem .85rem; border-radius:8px; font-size:.85rem"></div>
@@ -58,16 +58,17 @@
   </div>
 
   <h2 style="margin-top:3rem">Mail-teksten</h2>
-  <p class="subtle">Pas de inhoud (onderwerp + body) van de automatische mails aan. Laat een veld leeg om de ingebakken default te gebruiken.</p>
+  <p class="subtle">Pas de inhoud van de automatische mails aan. Laat leeg om de default te gebruiken.</p>
   <div class="card-static">
     <p class="subtle" style="margin-top:0; font-size:.85rem">
-      Beschikbare placeholders per template — gebruik bv. <code>{project_name}</code>:<br>
-      <strong>Threshold (warning/critical/exceeded):</strong> {project_name}, {percentage}, {hours_used}, {available_hours}, {threshold_warning}, {threshold_critical}, {threshold_exceeded}<br>
-      <strong>Inactivity:</strong> {project_name}, {user_name}, {returning_date}, {days_since}, {hours}, {threshold}<br>
-      <strong>Deadline approaching:</strong> {project_name}, {deadline_date}, {days_until}<br>
-      <strong>Deadline passed:</strong> {project_name}, {deadline_date}, {days_overdue}
+      Beschikbare placeholders:<br>
+      <strong>Threshold:</strong> {project_name}, {percentage}, {hours_used}, {available_hours}, {threshold_warning}, {threshold_critical}, {threshold_exceeded}, {greeting}<br>
+      <strong>Inactivity:</strong> {project_name}, {user_name}, {returning_date}, {days_since}, {hours}, {threshold}, {greeting}<br>
+      <strong>Deadline approaching:</strong> {project_name}, {deadline_date}, {days_until}, {greeting}<br>
+      <strong>Deadline passed:</strong> {project_name}, {deadline_date}, {days_overdue}, {greeting}<br>
+      <em>{greeting} wordt vervangen door "Hi &lt;voornaam&gt;" per ontvanger.</em>
     </p>
-    <form id="mailTemplatesForm" class="form" id="templatesForm">
+    <form id="mailTemplatesForm" class="form">
       <div id="templatesContainer"></div>
       <div><button class="btn btn-primary" type="submit">Mail-teksten opslaan</button></div>
     </form>
@@ -75,16 +76,9 @@
 
   <p class="subtle" style="margin-top:1.5rem">
     💡 <strong>Klanten beheren?</strong> <a href="/clients.html">Klanten</a>.<br>
+    💡 <strong>Capaciteit per medewerker?</strong> <a href="/medewerkers.html">Medewerkers</a>.<br>
     💡 <strong>PDF-prompt voor Claude aanpassen?</strong> <a href="/new-project.html">Nieuw project</a>.
   </p>
-
-  <h2 style="margin-top:3rem">Capaciteit per medewerker</h2>
-  <div class="card-static">
-    <form id="capacitiesForm" class="form">
-      <div id="capacitiesGrid"><span class="subtle">Medewerkers laden…</span></div>
-      <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Capaciteiten opslaan</button></div>
-    </form>
-  </div>
 
   <h2 style="margin-top:3rem">Gebruikers</h2>
   <div class="card-static">
@@ -139,7 +133,8 @@
     if (adminEmails.length === 0) lines.push('• Geen actieve admins gevonden');
     else lines.push(`• Actieve admins: ${adminEmails.map(escapeHtml).join(', ')}`);
     if (extra.length) lines.push(`• Extra: ${extra.map(escapeHtml).join(', ')}`);
-    lines.push('• Klantcontacten <em>met opt-in voor urenverbruik-mails</em> (alleen voor threshold-mails)');
+    lines.push('• Teamleden uit Moneybird (bij urenverbruik-mails)');
+    lines.push('• Klantcontacten met opt-in (bij urenverbruik-mails)');
     document.getElementById('recipientsPreview').innerHTML = lines.join('<br>');
   }
   updateRecipientsPreview();
@@ -174,7 +169,7 @@
     } catch (err) { toast(err.message, 'error'); }
   };
 
-  // ── Mail templates ─────────────────────────────────────────────
+  // Mail templates
   const TEMPLATE_LABELS = {
     threshold_warning: 'Urenverbruik — waarschuwing',
     threshold_critical: 'Urenverbruik — kritiek',
@@ -232,42 +227,7 @@
     } catch (err) { toast(err.message, 'error'); }
   });
 
-  // ── Capaciteiten ──────────────────────────────────────────────
-  const { employees } = await apiGet('/api/moneybird/employees').catch(() => ({ employees: [] }));
-  const caps = settings.employee_capacities || {};
-  const capGrid = document.getElementById('capacitiesGrid');
-  if (employees.length === 0) {
-    capGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden.</span>';
-  } else {
-    capGrid.innerHTML = `
-      <table class="table" style="margin:0">
-        <thead><tr><th>Medewerker</th><th style="width:160px">Uur per week</th></tr></thead>
-        <tbody>
-          ${employees.map((e) => `
-            <tr>
-              <td>${escapeHtml(e.name)}</td>
-              <td><input type="number" step="0.5" min="0" data-cap-id="${e.id}" value="${caps[e.id] ?? ''}" placeholder="bv. 40"></td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
-  }
-  document.getElementById('capacitiesForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const newCaps = {};
-    for (const input of document.querySelectorAll('input[data-cap-id]')) {
-      const id = input.dataset.capId;
-      const val = input.value.trim();
-      if (val === '') continue;
-      const num = Number(val);
-      if (Number.isFinite(num) && num >= 0) newCaps[id] = num;
-    }
-    try {
-      await apiSend('/api/admin/settings', 'POST', { employee_capacities: newCaps });
-      toast('Capaciteiten opgeslagen', 'success');
-    } catch (err) { toast(err.message, 'error'); }
-  });
-
-  // ── Gebruikers ────────────────────────────────────────────────
+  // Gebruikers
   async function refreshUsers() {
     const { users } = await apiGet('/api/admin/users');
     document.getElementById('usersTable').innerHTML = `

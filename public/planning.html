@@ -14,7 +14,7 @@
       <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
     </div>
   </div>
-  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum.</p>
+  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum. Inclusief Nederlandse feestdagen.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
@@ -30,13 +30,12 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel, isDutchHoliday, holidaysBetween } from '/app.js';
   const me = await renderTopbar('/planning.html');
 
   const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
   const WEEKS_BACK = 4;
 
-  // ── Datum-helpers ─────────────────────────────────────────────
   function todayIso() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
   function isoToDate(iso) { const [y,m,d]=iso.split('-').map(Number); return new Date(y,m-1,d); }
   function dateToIso(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
@@ -49,6 +48,10 @@
   }
   function isWeekend(d) { return d.getDay() === 0 || d.getDay() === 6; }
   function isOnVacation(iso, periods) { return (periods || []).some((p) => p.start <= iso && iso <= p.end); }
+  function isUnavailable(d, vacationPeriods) {
+    const iso = dateToIso(d);
+    return isWeekend(d) || isOnVacation(iso, vacationPeriods) || isDutchHoliday(iso);
+  }
   function mondayOf(date) {
     const d = new Date(date); d.setHours(0, 0, 0, 0);
     const dow = d.getDay();
@@ -64,7 +67,10 @@
       const e = p.end < endIso ? p.end : endIso;
       if (s > e) continue;
       let d = isoToDate(s); const end = isoToDate(e);
-      while (d <= end) { if (!isWeekend(d)) count++; d.setDate(d.getDate() + 1); }
+      while (d <= end) {
+        if (!isWeekend(d) && !isDutchHoliday(dateToIso(d))) count++;
+        d.setDate(d.getDate() + 1);
+      }
     }
     return count;
   }
@@ -76,8 +82,7 @@
     let d = new Date(); d.setHours(0, 0, 0, 0);
     let worked = 0; let safety = 365 * 5;
     while (worked < workDaysNeeded && safety-- > 0) {
-      const iso = dateToIso(d);
-      if (!isWeekend(d) && !isOnVacation(iso, periods)) {
+      if (!isUnavailable(d, periods)) {
         worked++;
         if (worked >= workDaysNeeded) return new Date(d);
       }
@@ -86,12 +91,10 @@
     return null;
   }
 
-  // ── Data laden ────────────────────────────────────────────────
   let projects = [], capacities = {}, vacationsByEmp = {}, allMoneybirdEntries = [];
   let trackedMoneybirdIds = new Set();
   let mbCacheStatus = '';
 
-  // Cutoff voor "laatste 4 weken" sectie
   function fourWeeksAgoIso() {
     const d = new Date(); d.setHours(0,0,0,0);
     d.setDate(d.getDate() - WEEKS_BACK * 7);
@@ -107,8 +110,9 @@
     const sinceIso = sinceDate.toISOString().slice(0, 10);
 
     const mbUrl = `/api/moneybird/time_entries?since=${sinceIso}${refresh ? '&nocache=1' : ''}`;
+    // BELANGRIJK: gebruik planning_view=1 voor véél kleinere payload
     const [projResp, settingsResp, mbResp] = await Promise.all([
-      apiGet('/api/projects?with_time_entries=1'),
+      apiGet('/api/projects?planning_view=1'),
       apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
       fetch(mbUrl, { credentials: 'same-origin' }).then(async (r) => {
         mbCacheStatus = r.headers.get('X-Cache') || '';
@@ -219,7 +223,6 @@
     });
   }
 
-  // Alle Moneybird-projecten met uren in laatste 4 weken (tracked + untracked)
   function moneybirdSummaryForEmployee(empId) {
     const cutoff = fourWeeksAgoIso();
     const map = new Map();
@@ -269,7 +272,11 @@
         if (completion) {
           const completionIso = dateToIso(completion);
           const vacationDays = vacationDaysInRange(upcoming, today, completionIso);
-          estimateHtml = `${baseWeeks} weken werk · verwacht klaar <strong>${fmtDate(completionIso)}</strong>${vacationDays > 0 ? ` (incl. ${vacationDays} ${vacationDays === 1 ? 'vakantiedag' : 'vakantiedagen'})` : ''}`;
+          const holidays = holidaysBetween(today, completionIso);
+          const extras = [];
+          if (vacationDays > 0) extras.push(`${vacationDays} ${vacationDays === 1 ? 'vakantiedag' : 'vakantiedagen'}`);
+          if (holidays.length > 0) extras.push(`${holidays.length} ${holidays.length === 1 ? 'feestdag' : 'feestdagen'}`);
+          estimateHtml = `${baseWeeks} weken werk · verwacht klaar <strong>${fmtDate(completionIso)}</strong>${extras.length ? ' (incl. ' + extras.join(' + ') + ')' : ''}`;
         } else { estimateHtml = `${baseWeeks} weken werk`; }
       } else if (e.totalRemaining === 0) {
         estimateHtml = '<span class="subtle">niets meer te doen</span>';
@@ -314,24 +321,17 @@
           ${overigPanel}`;
       }).join('');
 
-      // Alle Moneybird-projecten in laatste 4 weken (tracked + untracked)
       const mbSummary = moneybirdSummaryForEmployee(e.id);
       const mbSummaryTotal = mbSummary.reduce((a, x) => a + x.hours, 0);
       const mbSummaryHtml = mbSummary.length === 0
         ? '<p class="subtle">Geen uren geschreven in Moneybird in de laatste 4 weken.</p>'
         : `<table class="table" style="margin:0">
-            <thead><tr>
-              <th>Moneybird-project</th>
-              <th>Status</th>
-              <th>Uren laatste 4 weken</th>
-            </tr></thead>
+            <thead><tr><th>Moneybird-project</th><th>Status</th><th>Uren laatste 4 weken</th></tr></thead>
             <tbody>
               ${mbSummary.map((r) => `
                 <tr>
                   <td><strong>${escapeHtml(r.name)}</strong></td>
-                  <td>${r.tracked
-                    ? '<span class="badge badge-green">gekoppeld in app</span>'
-                    : '<span class="badge badge-gray">niet gekoppeld</span>'}</td>
+                  <td>${r.tracked ? '<span class="badge badge-green">gekoppeld in app</span>' : '<span class="badge badge-gray">niet gekoppeld</span>'}</td>
                   <td>${r.hours.toFixed(1)} u</td>
                 </tr>`).join('')}
               <tr style="background:var(--bg-soft)">
@@ -369,16 +369,17 @@
           <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold)</h4>
           <table class="table" style="margin:0">
             <thead><tr>
-              <th>Project</th><th>Module</th><th>Status</th>
+              <th>Project</th><th>Modules</th><th>Status</th>
               <th>Uren door ${escapeHtml(e.name)}</th><th>Resterend</th><th>Totaal</th>
             </tr></thead>
             <tbody>
               ${rows.map((row) => {
                 const p = row.project;
+                const mods = (p.modules || []).map((m) => `<span class="badge badge-blue" style="margin-right:.2rem">${escapeHtml(m)}</span>`).join('') || '<span class="subtle">—</span>';
                 return `
                   <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
                     <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-                    <td>${p.module ? `<span class="badge badge-blue">${escapeHtml(p.module)}</span>` : '<span class="subtle">—</span>'}</td>
+                    <td>${mods}</td>
                     <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
                     <td>${row.ownHours.toFixed(1)} u</td>
                     <td>${row.remaining.toFixed(1)} u</td>
@@ -390,9 +391,7 @@
 
           <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
           <table class="table" style="margin:0">
-            <thead><tr>
-              <th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th>
-            </tr></thead>
+            <thead><tr><th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th></tr></thead>
             <tbody>${weeklyRows}</tbody>
           </table>
 
@@ -447,7 +446,6 @@
 
   document.getElementById('empFilter').addEventListener('change', render);
 
-  // ── Excel export ──────────────────────────────────────────────
   document.getElementById('exportBtn').onclick = () => {
     if (typeof XLSX === 'undefined') { toast('Excel-library niet geladen', 'error'); return; }
     const wb = XLSX.utils.book_new();
@@ -474,7 +472,8 @@
       for (const r of e.rows) {
         const p = r.project;
         assignRows.push({
-          'Medewerker': e.name, 'Project': p.name, 'Module': p.module || '',
+          'Medewerker': e.name, 'Project': p.name,
+          'Modules': (p.modules || []).join(', '),
           'Status': statusLabel(p.status), 'POC': p.is_poc ? 'Ja' : '',
           'Deadline': p.deadline || '',
           'Uren door persoon': Math.round(r.ownHours * 10) / 10,
@@ -499,14 +498,12 @@
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly');
 
-    // Nieuwe sheet: alle Moneybird-projecten per medewerker (laatste 4w)
     const mbRows = [];
     for (const e of employees) {
       const summary = moneybirdSummaryForEmployee(e.id);
       for (const r of summary) {
         mbRows.push({
-          'Medewerker': e.name,
-          'Moneybird-project': r.name,
+          'Medewerker': e.name, 'Moneybird-project': r.name,
           'Status': r.tracked ? 'gekoppeld in app' : 'niet gekoppeld',
           'Uren (4 weken)': Math.round(r.hours * 10) / 10,
         });

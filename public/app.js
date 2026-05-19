@@ -1,4 +1,4 @@
-// Gedeeld frontend-script: auth-check, helpers, topbar render, toasts.
+// Gedeeld frontend-script: auth-check, helpers, topbar render, toasts, NL feestdagen.
 
 export async function apiGet(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
@@ -54,7 +54,6 @@ export const STATUS_OPTIONS = [
   { value: 'done',        label: 'Done' },
   { value: 'future',      label: 'Future' },
 ];
-
 export function statusLabel(value) {
   const opt = STATUS_OPTIONS.find((o) => o.value === value);
   return opt ? opt.label : value;
@@ -93,10 +92,82 @@ export function deadlineBadge(iso) {
   return `<span class="badge badge-blue">${fmtDate(iso)} (${d}d)</span>`;
 }
 
-// Europese euro-notatie zonder decimalen: € 14.500
 export function fmtEuro(amount) {
   const rounded = Math.round(Number(amount) || 0);
   return '€' + rounded.toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+}
+
+// ── Nederlandse feestdagen ──────────────────────────────────────────
+// Berekent jaarlijks: Nieuwjaarsdag, Tweede Paasdag, Koningsdag,
+// Hemelvaartsdag, Tweede Pinksterdag, Eerste + Tweede Kerstdag.
+// Goede Vrijdag en Bevrijdingsdag (5 mei) zijn niet universeel vrij in NL en worden niet meegerekend.
+function calculateEaster(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+function isoOf(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+const _holidayCache = new Map();
+export function dutchHolidaysForYear(year) {
+  if (_holidayCache.has(year)) return _holidayCache.get(year);
+  const out = [];
+  // Nieuwjaarsdag
+  out.push({ date: `${year}-01-01`, name: 'Nieuwjaarsdag' });
+  // Koningsdag (27 april, 26 als 27 op zondag valt)
+  const k = new Date(year, 3, 27);
+  if (k.getDay() === 0) k.setDate(26);
+  out.push({ date: isoOf(k), name: 'Koningsdag' });
+  // Pasen-gerelateerd
+  const easter = calculateEaster(year);
+  const ep2 = new Date(easter); ep2.setDate(ep2.getDate() + 1);
+  const hem = new Date(easter); hem.setDate(hem.getDate() + 39);
+  const pin2 = new Date(easter); pin2.setDate(pin2.getDate() + 50);
+  out.push({ date: isoOf(ep2), name: 'Tweede Paasdag' });
+  out.push({ date: isoOf(hem), name: 'Hemelvaartsdag' });
+  out.push({ date: isoOf(pin2), name: 'Tweede Pinksterdag' });
+  // Kerst
+  out.push({ date: `${year}-12-25`, name: 'Eerste Kerstdag' });
+  out.push({ date: `${year}-12-26`, name: 'Tweede Kerstdag' });
+  _holidayCache.set(year, out);
+  return out;
+}
+const _holidayDates = new Map();
+function holidayDateSetFor(year) {
+  if (_holidayDates.has(year)) return _holidayDates.get(year);
+  const set = new Set(dutchHolidaysForYear(year).map((h) => h.date));
+  _holidayDates.set(year, set);
+  return set;
+}
+export function isDutchHoliday(iso) {
+  if (!iso || iso.length < 4) return false;
+  const year = Number(iso.slice(0, 4));
+  return holidayDateSetFor(year).has(iso);
+}
+export function holidaysBetween(startIso, endIso) {
+  if (startIso > endIso) return [];
+  const out = [];
+  const startYear = Number(startIso.slice(0, 4));
+  const endYear = Number(endIso.slice(0, 4));
+  for (let y = startYear; y <= endYear; y++) {
+    for (const h of dutchHolidaysForYear(y)) {
+      if (h.date >= startIso && h.date <= endIso) out.push(h);
+    }
+  }
+  return out;
 }
 
 const ACTION_LABELS = {
@@ -126,8 +197,7 @@ export function activityDescription(entry) {
   const d = entry.details || {};
   if (entry.action === 'status_changed') return `${label}: ${statusLabel(d.from)} → ${statusLabel(d.to)}`;
   if (entry.action === 'available_hours_changed' || entry.action === 'hourly_rate_changed') return `${label}: ${d.from} → ${d.to}`;
-  if (entry.action === 'name_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
-  if (entry.action === 'module_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  if (entry.action === 'name_changed' || entry.action === 'module_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
   if (entry.action === 'modules_changed') {
     const f = Array.isArray(d.from) ? d.from.join(', ') : '—';
     const t = Array.isArray(d.to) ? d.to.join(', ') : '—';
@@ -151,8 +221,10 @@ export async function renderTopbar(activePath) {
     { href: '/projects.html', label: 'Projecten' },
     { href: '/planning.html', label: 'Planning' },
     { href: '/clients.html', label: 'Klanten' },
+    { href: '/medewerkers.html', label: 'Medewerkers' },
   ];
   if (isAdmin) links.push({ href: '/admin-settings.html', label: 'Instellingen' });
+  links.push({ href: '/reports.html', label: 'Rapportages' });
   const topbar = document.getElementById('topbar');
   if (topbar) {
     topbar.innerHTML = `

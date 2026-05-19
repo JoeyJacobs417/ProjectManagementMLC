@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Medewerkers — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div class="page-header">
+    <h1>Medewerkers</h1>
+    <span class="subtle" id="countLabel"></span>
+  </div>
+  <p class="subtle">Overzicht per medewerker: capaciteit (uren/week), prestaties op toegewezen projecten, en declarabiliteit. Capaciteit is alleen aan te passen door admins.</p>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+
+  <div class="card-static hidden" id="capacityCard" style="margin-top:1.5rem">
+    <h3 style="margin-top:0">Capaciteit aanpassen</h3>
+    <p class="subtle" style="margin-top:-.4rem">Aantal uren per week dat een medewerker beschikbaar is. Gebruikt op de Planning-pagina en in de omzetvoorspelling.</p>
+    <form id="capForm" class="form">
+      <div id="capGrid"></div>
+      <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Capaciteiten opslaan</button></div>
+    </form>
+  </div>
+</main>
+<script type="module">
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml } from '/app.js';
+  const me = await renderTopbar('/medewerkers.html');
+  const isAdmin = me?.role === 'admin';
+
+  const [{ projects }, { settings }, { employees: mbEmployees }] = await Promise.all([
+    apiGet('/api/projects'),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {} } })),
+    apiGet('/api/moneybird/employees').catch(() => ({ employees: [] })),
+  ]);
+  const capacities = settings.employee_capacities || {};
+
+  // Bouw map van alle medewerkers (uit Moneybird + uit projects teams)
+  const empMap = new Map();
+  for (const e of mbEmployees) {
+    empMap.set(e.id, { id: e.id, name: e.name, email: e.email || '', projects: [], totalHours: 0, billable: 0, withinBudget: 0, hasBudget: 0 });
+  }
+  for (const p of projects) {
+    for (const t of (p.team || [])) {
+      if (!empMap.has(t.moneybird_user_id)) {
+        empMap.set(t.moneybird_user_id, { id: t.moneybird_user_id, name: t.name, email: '', projects: [], totalHours: 0, billable: 0, withinBudget: 0, hasBudget: 0 });
+      }
+      const rec = empMap.get(t.moneybird_user_id);
+      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === t.moneybird_user_id);
+      const myHours = stat ? Number(stat.hours) || 0 : 0;
+
+      // Declarabiliteit per project:
+      // - Project zonder budget: alle uren tellen als declarabel
+      // - Project met budget: capRatio = min(1, budget / totaalUrenOpProject)
+      //   billable_voor_deze_persoon = myHours * capRatio
+      const projectTotalUsed = (p.team_stats || []).reduce((a, s) => a + (Number(s.hours) || 0), 0);
+      const budget = Number(p.available_hours) || 0;
+      let projBillable = myHours;
+      if (budget > 0 && projectTotalUsed > 0) {
+        const capRatio = Math.min(1, budget / projectTotalUsed);
+        projBillable = myHours * capRatio;
+      }
+
+      rec.projects.push({ project: p, myHours, projBillable });
+      rec.totalHours += myHours;
+      rec.billable += projBillable;
+      if (p.within_budget !== null) {
+        rec.hasBudget += 1;
+        if (p.within_budget) rec.withinBudget += 1;
+      }
+    }
+  }
+
+  // Verberg medewerkers zonder toegewezen projecten EN zonder capaciteit-instelling én zonder Moneybird-koppeling
+  // Maar laat ze wel zien als ze in Moneybird voorkomen (anders kan admin geen capaciteit instellen)
+  const employees = Array.from(empMap.values()).sort((a, b) => b.totalHours - a.totalHours);
+
+  document.getElementById('countLabel').textContent = `${employees.length} medewerker${employees.length === 1 ? '' : 's'}`;
+
+  // Hoofdtabel
+  const c = document.getElementById('content');
+  if (employees.length === 0) {
+    c.innerHTML = '<p class="subtle">Nog geen medewerkers gevonden. Synchroniseer een Moneybird-project of wijs medewerkers toe aan projecten.</p>';
+  } else {
+    c.innerHTML = `
+      <table class="table">
+        <thead><tr>
+          <th>Medewerker</th>
+          <th>Capaciteit</th>
+          <th>Projecten toegewezen</th>
+          <th>Uren geschreven</th>
+          <th>Declarabele uren</th>
+          <th>Declarabiliteit</th>
+          <th>Binnen budget</th>
+        </tr></thead>
+        <tbody>
+          ${employees.map((e) => {
+            const cap = Number(capacities[e.id]) || 0;
+            const decl = e.totalHours > 0 ? (e.billable / e.totalHours) * 100 : null;
+            const declBadge = decl === null ? '<span class="subtle">—</span>' :
+              `<span class="badge ${decl >= 90 ? 'badge-green' : decl >= 70 ? 'badge-orange' : 'badge-red'}">${decl.toFixed(1)}%</span>`;
+            const wbPct = e.hasBudget ? Math.round((e.withinBudget / e.hasBudget) * 100) : null;
+            const wbBadge = wbPct === null ? '—' :
+              `<span class="badge ${wbPct >= 80 ? 'badge-green' : wbPct >= 50 ? 'badge-orange' : 'badge-red'}">${e.withinBudget}/${e.hasBudget} (${wbPct}%)</span>`;
+            return `
+              <tr>
+                <td><strong>${escapeHtml(e.name)}</strong>${e.email ? `<br><span class="subtle" style="font-size:.8rem">${escapeHtml(e.email)}</span>` : ''}</td>
+                <td>${cap > 0 ? cap + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
+                <td>${e.projects.length}</td>
+                <td>${e.totalHours.toFixed(1)} u</td>
+                <td>${e.billable.toFixed(1)} u</td>
+                <td>${declBadge}</td>
+                <td>${wbBadge}</td>
+              </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
+        <strong>Declarabiliteit</strong> = aandeel van geschreven uren dat binnen het projectbudget valt. Schrijft een teamlid 40 uur op een project met 30 uur budget waar het hele team 60 uur op heeft geschreven, dan zijn (40 × 30/60) = 20 uur declarabel.
+      </p>
+    `;
+  }
+
+  // Capaciteit-card (admin only)
+  if (isAdmin && employees.length > 0) {
+    document.getElementById('capacityCard').classList.remove('hidden');
+    document.getElementById('capGrid').innerHTML = `
+      <table class="table" style="margin:0">
+        <thead><tr><th>Medewerker</th><th style="width:160px">Uur per week</th></tr></thead>
+        <tbody>
+          ${employees.map((e) => `
+            <tr>
+              <td>${escapeHtml(e.name)}</td>
+              <td><input type="number" step="0.5" min="0" data-cap-id="${e.id}" value="${capacities[e.id] ?? ''}" placeholder="bv. 40"></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+
+    document.getElementById('capForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const newCaps = {};
+      for (const input of document.querySelectorAll('input[data-cap-id]')) {
+        const id = input.dataset.capId;
+        const val = input.value.trim();
+        if (val === '') continue;
+        const num = Number(val);
+        if (Number.isFinite(num) && num >= 0) newCaps[id] = num;
+      }
+      try {
+        await apiSend('/api/admin/settings', 'POST', { employee_capacities: newCaps });
+        toast('Capaciteiten opgeslagen', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    });
+  }
+</script>
+</body></html>

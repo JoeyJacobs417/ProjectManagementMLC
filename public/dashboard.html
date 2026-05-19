@@ -7,7 +7,7 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <h1>Dashboard</h1>
-  <p class="subtle">Overzicht: deadlines, modulerapport, omzetvoorspelling en medewerkers.</p>
+  <p class="subtle">Komende deadlines en omzetvoorspelling. Voor meer rapportages: zie <a href="/reports.html">Rapportages</a>. Medewerker-overzicht: <a href="/medewerkers.html">Medewerkers</a>.</p>
 
   <h2>Komende deadlines</h2>
   <div id="deadlines"><p class="subtle">Laden…</p></div>
@@ -19,14 +19,14 @@
         Periode:
         <select id="forecastPeriod" style="width:auto">
           <option value="weeks-4">Komende 4 weken</option>
-          <option value="weeks-8" selected>Komende 8 weken</option>
+          <option value="weeks-8">Komende 8 weken</option>
           <option value="weeks-12">Komende 12 weken</option>
           <option value="weeks-26">Komende 26 weken</option>
           <option value="weeks-52">Komende 52 weken</option>
           <option value="month">Specifieke maand</option>
         </select>
       </label>
-      <label id="monthPickerWrap" class="hidden" style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
+      <label id="monthPickerWrap" style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
         Maand:
         <input type="month" id="forecastMonth" style="width:auto">
       </label>
@@ -34,16 +34,9 @@
     </div>
   </div>
   <div id="forecast"><p class="subtle">Laden…</p></div>
-
-  <h2 style="margin-top:2rem">Modulerapport</h2>
-  <div id="moduleReport"><p class="subtle">Laden…</p></div>
-
-  <h2 style="margin-top:2.5rem">Medewerkers</h2>
-  <p class="subtle">Prestaties per medewerker over alle projecten waar ze aan zijn toegewezen.</p>
-  <div id="employees"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge, daysFromNow, fmtDate, fmtEuro } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge, daysFromNow, fmtDate, fmtEuro, isDutchHoliday } from '/app.js';
   await renderTopbar('/dashboard.html');
   const [{ projects }, { settings }] = await Promise.all([
     apiGet('/api/projects'),
@@ -83,12 +76,16 @@
     });
   }
 
-  // Helpers
   function isoOf(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
   function isOnVacation(iso, periods) {
     return (periods || []).some((p) => p.start <= iso && iso <= p.end);
+  }
+  function isUnavailable(d, vacationPeriods) {
+    const iso = isoOf(d);
+    const dow = d.getDay();
+    return dow === 0 || dow === 6 || isOnVacation(iso, vacationPeriods) || isDutchHoliday(iso);
   }
   function workdaysInMonth(year, monthIdx0, vacationPeriods) {
     const first = new Date(year, monthIdx0, 1);
@@ -96,26 +93,23 @@
     const today = new Date(); today.setHours(0,0,0,0);
     let d = new Date(first); let workdays = 0;
     while (d <= last) {
-      const dow = d.getDay();
-      if (dow !== 0 && dow !== 6) {
-        if (d >= today) {
-          if (!isOnVacation(isoOf(d), vacationPeriods)) workdays++;
-        }
-      }
+      if (d >= today && !isUnavailable(d, vacationPeriods)) workdays++;
       d.setDate(d.getDate() + 1);
     }
     return workdays;
   }
 
-  // Omzetvoorspelling
   const periodSel = document.getElementById('forecastPeriod');
   const monthInput = document.getElementById('forecastMonth');
   const monthWrap = document.getElementById('monthPickerWrap');
   const STORAGE_PERIOD = 'pm_forecast_period';
   const STORAGE_MONTH = 'pm_forecast_month';
-  const next = new Date(); next.setDate(1); next.setMonth(next.getMonth() + 1);
-  monthInput.value = sessionStorage.getItem(STORAGE_MONTH) || `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}`;
-  periodSel.value = sessionStorage.getItem(STORAGE_PERIOD) || 'weeks-8';
+
+  // Default: huidige maand
+  const now = new Date();
+  const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  monthInput.value = sessionStorage.getItem(STORAGE_MONTH) || currentMonthIso;
+  periodSel.value = sessionStorage.getItem(STORAGE_PERIOD) || 'month';
 
   function getPeriodHoursForEmployee(empId) {
     const cap = Number(capacities[empId]) || 0;
@@ -129,8 +123,7 @@
       let workdays = 0;
       const d = new Date(today);
       while (d < end) {
-        const dow = d.getDay();
-        if (dow !== 0 && dow !== 6 && !isOnVacation(isoOf(d), empVacations)) workdays++;
+        if (!isUnavailable(d, empVacations)) workdays++;
         d.setDate(d.getDate() + 1);
       }
       return { hours: (cap / 5) * workdays, label: `${weeks}w (${workdays} werkdagen)` };
@@ -148,10 +141,9 @@
   function renderForecast() {
     sessionStorage.setItem(STORAGE_PERIOD, periodSel.value);
     sessionStorage.setItem(STORAGE_MONTH, monthInput.value || '');
-    monthWrap.classList.toggle('hidden', periodSel.value !== 'month');
+    monthWrap.style.display = periodSel.value === 'month' ? '' : 'none';
 
     const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future');
-
     const perPerson = new Map();
     let grandTotal = 0;
     for (const p of inProgress) {
@@ -166,7 +158,6 @@
           ? (memberHours / totalProjectHoursUsed)
           : (1 / p.team.length);
         const estRemainingHours = shareRatio * remaining;
-
         if (!perPerson.has(member.moneybird_user_id)) {
           perPerson.set(member.moneybird_user_id, {
             id: member.moneybird_user_id, name: member.name,
@@ -231,119 +222,12 @@
         </tbody>
       </table>
       <p class="subtle" style="margin-top:.5rem">
-        Schatting op basis van resterende uren × uurtarief van projecten "In progress"/"Future", verdeeld over teamleden naar evenredigheid van gewerkte uren (of gelijk verdeeld als nog niet gewerkt), gecapt op (capaciteit ÷ 5) × werkdagen in de periode.
+        Werkbare uren = (capaciteit ÷ 5) × werkdagen in de periode, exclusief weekenden, vakantiedagen en Nederlandse feestdagen.
       </p>
     `;
   }
   periodSel.addEventListener('change', renderForecast);
   monthInput.addEventListener('change', renderForecast);
   renderForecast();
-
-  // Modulerapport — projecten kunnen nu meerdere modules hebben
-  const moduleEl = document.getElementById('moduleReport');
-  const byModule = new Map();
-  for (const p of projects) {
-    const mods = (p.modules && p.modules.length) ? p.modules : ['(geen module)'];
-    for (const mod of mods) {
-      if (!byModule.has(mod)) byModule.set(mod, []);
-      byModule.get(mod).push(p);
-    }
-  }
-  const moduleRows = Array.from(byModule.entries()).map(([mod, projs]) => {
-    const totalAvail = projs.reduce((a, p) => a + (Number(p.available_hours) || 0), 0);
-    const totalUsed = projs.reduce((a, p) => a + (Number(p.hours_used) || 0), 0);
-    const avgPct = totalAvail > 0 ? Math.round((totalUsed / totalAvail) * 1000) / 10 : 0;
-    const avgHoursPerProject = projs.length > 0 ? totalUsed / projs.length : 0;
-    const statusCounts = projs.reduce((acc, p) => {
-      acc[p.status || 'in_progress'] = (acc[p.status || 'in_progress'] || 0) + 1;
-      return acc;
-    }, {});
-    return { mod, projs, totalAvail, totalUsed, avgPct, avgHoursPerProject, statusCounts };
-  }).sort((a, b) => b.projs.length - a.projs.length);
-
-  if (moduleRows.length === 0) {
-    moduleEl.innerHTML = '<p class="subtle">Geen projecten om te rapporteren.</p>';
-  } else {
-    moduleEl.innerHTML = moduleRows.map((m) => {
-      const statusBadges = Object.entries(m.statusCounts).map(([s, c]) =>
-        `<span class="badge status-${s}">${statusLabel(s)}: ${c}</span>`).join(' ');
-      return `
-        <div class="card-static" style="margin-bottom:.75rem">
-          <div class="card-header">
-            <div>
-              <h3 style="margin:0">${escapeHtml(m.mod)}</h3>
-              <p class="subtle" style="margin:.25rem 0">${m.projs.length} ${m.projs.length === 1 ? 'project' : 'projecten'} · ${statusBadges}</p>
-            </div>
-            <div class="subtle" style="text-align:right">
-              <div><strong>${m.totalUsed.toFixed(1)}</strong> / ${m.totalAvail.toFixed(1)} uur totaal</div>
-              <div>Gemiddeld <strong>${m.avgHoursPerProject.toFixed(1)} uur/project</strong></div>
-              ${m.totalAvail > 0 ? `<div><span class="badge ${percentageBadgeClass(m.avgPct)}">${m.avgPct}% verbruikt</span></div>` : ''}
-            </div>
-          </div>
-          <details style="margin-top:.5rem">
-            <summary class="subtle" style="cursor:pointer">Projecten in deze module</summary>
-            <table class="table" style="margin:.5rem 0 0">
-              <thead><tr><th>Project</th><th>Status</th><th>Uren</th><th>%</th></tr></thead>
-              <tbody>
-                ${m.projs.map((p) => `
-                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
-                    <td><strong>${escapeHtml(p.name)}</strong></td>
-                    <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
-                    <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
-                    <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </details>
-        </div>`;
-    }).join('');
-    moduleEl.querySelectorAll('tr.clickable').forEach((tr) => {
-      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
-    });
-  }
-
-  // Medewerkers
-  const empMap = new Map();
-  for (const p of projects) {
-    for (const t of (p.team || [])) {
-      const key = t.moneybird_user_id;
-      if (!empMap.has(key)) {
-        empMap.set(key, { id: key, name: t.name, projects: [], totalHours: 0, withinBudget: 0, hasBudget: 0 });
-      }
-      const rec = empMap.get(key);
-      rec.projects.push(p);
-      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
-      rec.totalHours += stat ? Number(stat.hours) || 0 : 0;
-      if (p.within_budget !== null) {
-        rec.hasBudget += 1;
-        if (p.within_budget) rec.withinBudget += 1;
-      }
-    }
-  }
-  const employees = Array.from(empMap.values()).sort((a, b) => b.totalHours - a.totalHours);
-
-  const empEl = document.getElementById('employees');
-  if (employees.length === 0) {
-    empEl.innerHTML = '<p class="subtle">Nog geen medewerkers toegewezen aan projecten.</p>';
-  } else {
-    empEl.innerHTML = `
-      <table class="table">
-        <thead><tr><th>Medewerker</th><th>Projecten</th><th>Totaal uren</th><th>Binnen budget</th></tr></thead>
-        <tbody>
-          ${employees.map((e) => {
-            const pctOk = e.hasBudget ? Math.round((e.withinBudget / e.hasBudget) * 100) : null;
-            const badge = pctOk === null ? '—' :
-              `<span class="badge ${pctOk >= 80 ? 'badge-green' : pctOk >= 50 ? 'badge-orange' : 'badge-red'}">${e.withinBudget}/${e.hasBudget} (${pctOk}%)</span>`;
-            return `
-              <tr>
-                <td><strong>${escapeHtml(e.name)}</strong></td>
-                <td>${e.projects.length}</td>
-                <td>${e.totalHours.toFixed(1)} u</td>
-                <td>${badge}</td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>`;
-  }
 </script>
 </body></html>

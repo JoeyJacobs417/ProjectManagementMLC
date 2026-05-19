@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Rapportages — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <h1>Rapportages</h1>
+  <p class="subtle">Verzameling van rapportages. Meer komt hier.</p>
+
+  <h2>Modulerapport</h2>
+  <p class="subtle">Per module: aantal projecten, status-breakdown, totaal uren en gemiddelde uren per project.</p>
+  <div id="moduleReport"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
+  await renderTopbar('/reports.html');
+
+  const { projects } = await apiGet('/api/projects');
+
+  const byModule = new Map();
+  for (const p of projects) {
+    const mods = (p.modules && p.modules.length) ? p.modules : ['(geen module)'];
+    for (const mod of mods) {
+      if (!byModule.has(mod)) byModule.set(mod, []);
+      byModule.get(mod).push(p);
+    }
+  }
+  const moduleRows = Array.from(byModule.entries()).map(([mod, projs]) => {
+    const totalAvail = projs.reduce((a, p) => a + (Number(p.available_hours) || 0), 0);
+    const totalUsed = projs.reduce((a, p) => a + (Number(p.hours_used) || 0), 0);
+    const avgPct = totalAvail > 0 ? Math.round((totalUsed / totalAvail) * 1000) / 10 : 0;
+    const avgHoursPerProject = projs.length > 0 ? totalUsed / projs.length : 0;
+    const statusCounts = projs.reduce((acc, p) => {
+      acc[p.status || 'in_progress'] = (acc[p.status || 'in_progress'] || 0) + 1;
+      return acc;
+    }, {});
+    return { mod, projs, totalAvail, totalUsed, avgPct, avgHoursPerProject, statusCounts };
+  }).sort((a, b) => b.projs.length - a.projs.length);
+
+  const moduleEl = document.getElementById('moduleReport');
+  if (moduleRows.length === 0) {
+    moduleEl.innerHTML = '<p class="subtle">Geen projecten om te rapporteren.</p>';
+  } else {
+    moduleEl.innerHTML = moduleRows.map((m) => {
+      const statusBadges = Object.entries(m.statusCounts).map(([s, c]) =>
+        `<span class="badge status-${s}">${statusLabel(s)}: ${c}</span>`).join(' ');
+      return `
+        <div class="card-static" style="margin-bottom:.75rem">
+          <div class="card-header">
+            <div>
+              <h3 style="margin:0">${escapeHtml(m.mod)}</h3>
+              <p class="subtle" style="margin:.25rem 0">${m.projs.length} ${m.projs.length === 1 ? 'project' : 'projecten'} · ${statusBadges}</p>
+            </div>
+            <div class="subtle" style="text-align:right">
+              <div><strong>${m.totalUsed.toFixed(1)}</strong> / ${m.totalAvail.toFixed(1)} uur totaal</div>
+              <div>Gemiddeld <strong>${m.avgHoursPerProject.toFixed(1)} uur/project</strong></div>
+              ${m.totalAvail > 0 ? `<div><span class="badge ${percentageBadgeClass(m.avgPct)}">${m.avgPct}% verbruikt</span></div>` : ''}
+            </div>
+          </div>
+          <details style="margin-top:.5rem">
+            <summary class="subtle" style="cursor:pointer">Projecten in deze module</summary>
+            <table class="table" style="margin:.5rem 0 0">
+              <thead><tr><th>Project</th><th>Status</th><th>Uren</th><th>%</th></tr></thead>
+              <tbody>
+                ${m.projs.map((p) => `
+                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+                    <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
+                    <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </details>
+        </div>`;
+    }).join('');
+    moduleEl.querySelectorAll('tr.clickable').forEach((tr) => {
+      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    });
+  }
+</script>
+</body></html>
