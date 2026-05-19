@@ -1,7 +1,7 @@
-// GET /api/projects                    -> lijst projecten
-// GET /api/projects?format=xlsx        -> Excel-export
+// GET /api/projects               -> lijst projecten (incl. last_synced_at)
+// GET /api/projects?format=xlsx   -> Excel-export
 // GET /api/projects?with_time_entries=1 -> incl. time entries (voor planning)
-// POST /api/projects                   -> nieuw project
+// POST /api/projects              -> nieuw project (minstens 1 module verplicht)
 import { Redis } from '@upstash/redis';
 import * as XLSX from 'xlsx';
 import { requireUser } from '../../lib/auth.js';
@@ -51,8 +51,31 @@ function normalizeContacts(input) {
 }
 
 function normalizeStatus(s) { return VALID_STATUSES.includes(String(s || '').toLowerCase()) ? String(s).toLowerCase() : 'in_progress'; }
-function normalizeModule(m) { return VALID_MODULES.includes(String(m || '').trim()) ? String(m).trim() : ''; }
+
+// Accept modules (array) of legacy module (string) en filter op valid
+function normalizeModules(input) {
+  let raw = [];
+  if (Array.isArray(input)) raw = input;
+  else if (typeof input === 'string' && input.trim()) raw = [input];
+  const seen = new Set();
+  const out = [];
+  for (const m of raw) {
+    const v = String(m || '').trim();
+    if (!VALID_MODULES.includes(v) || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
 function normalizeDate(d) { return isIsoDate(d) ? String(d) : ''; }
+
+// Geeft modules array terug uit project (backwards compat: legacy 'module' string)
+function modulesOf(project) {
+  if (Array.isArray(project.modules) && project.modules.length > 0) return project.modules;
+  if (project.module) return [project.module];
+  return [];
+}
 
 function enrichWithStats(project, entries) {
   const hoursUsed = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
@@ -65,10 +88,12 @@ function enrichWithStats(project, entries) {
       .reduce((a, e) => a + (Number(e.hours) || 0), 0);
     return { ...m, hours: Math.round(memberHours * 100) / 100 };
   });
+  const mods = modulesOf(project);
   return {
     ...project,
     status: project.status || 'in_progress',
-    module: project.module || '',
+    modules: mods,
+    module: mods[0] || '', // legacy compat
     deadline: project.deadline || '',
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
@@ -77,6 +102,7 @@ function enrichWithStats(project, entries) {
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
     activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
+    last_synced_at: project.last_synced_at || null,
     team,
     team_stats: teamStats,
     hours_used: hoursUsed,
@@ -96,7 +122,7 @@ function buildExcel(enrichedProjects, clientsById) {
     'Project': p.name || '',
     'Status': statusLabel(p.status),
     'POC': p.is_poc ? 'Ja' : '',
-    'Module': p.module || '',
+    'Modules': (p.modules || []).join(', '),
     'Klant': clientsById[p.client_id]?.name || '',
     'Projectmanager': p.manager_name || '',
     'Startdatum': p.start_date || '',
@@ -111,6 +137,7 @@ function buildExcel(enrichedProjects, clientsById) {
     'Contacten': (p.contacts || []).map((c) => `${c.name}${c.email ? ' <' + c.email + '>' : ''}${c.receives_threshold_mails ? ' [alerts]' : ''}`).join('; '),
     'Feature requests': p.feature_requests || '',
     'Moneybird ID': p.moneybird_project_id || '',
+    'Laatste sync': p.last_synced_at || '',
     'Aangemaakt': p.created_at || '',
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -129,15 +156,12 @@ export default async function handler(req, res) {
   if (!user) return;
 
   if (req.method === 'GET') {
-    // Parallel: projecten, users
     const [allProjects, users] = await Promise.all([listProjects(), listUsers()]);
     let projects = allProjects;
     if (user.role !== 'admin') {
       projects = projects.filter((p) => p.manager_id === user.id);
     }
-    // Eén pipeline-call voor alle time entries van deze projecten
     const entriesByProject = await listTimeEntriesBatch(projects.map((p) => p.id));
-
     const wantsTimeEntries = req.query.with_time_entries === '1';
     const enriched = projects
       .map((p) => {
@@ -174,6 +198,11 @@ export default async function handler(req, res) {
       res.status(400).json({ error: 'Moneybird project is verplicht' });
       return;
     }
+    const modules = normalizeModules(b.modules !== undefined ? b.modules : b.module);
+    if (modules.length === 0) {
+      res.status(400).json({ error: 'Selecteer minstens 1 module' });
+      return;
+    }
     const projectId = newId('p_');
     let pdfStored = false;
     let pdfFilename = b.source_pdf_filename || null;
@@ -202,13 +231,14 @@ export default async function handler(req, res) {
       team: normalizeTeam(b.team),
       contacts: normalizeContacts(b.contacts),
       status: normalizeStatus(b.status),
-      module: normalizeModule(b.module),
+      modules,
       deadline: normalizeDate(b.deadline),
       start_date: normalizeDate(b.start_date),
       is_poc: !!b.is_poc,
       feature_requests: String(b.feature_requests || ''),
       notes: [],
       activity_log: [],
+      last_synced_at: null,
       phases: Array.isArray(b.phases)
         ? b.phases.filter((ph) => ph && ph.name).map((ph) => ({
             name: String(ph.name),
