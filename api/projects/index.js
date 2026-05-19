@@ -19,9 +19,7 @@ const kv = Redis.fromEnv();
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
-function isIsoDate(s) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
-}
+function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
 
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
@@ -53,7 +51,7 @@ function normalizeContacts(input) {
 
 function normalizeStatus(s) { return VALID_STATUSES.includes(String(s || '').toLowerCase()) ? String(s).toLowerCase() : 'in_progress'; }
 function normalizeModule(m) { return VALID_MODULES.includes(String(m || '').trim()) ? String(m).trim() : ''; }
-function normalizeDeadline(d) { return isIsoDate(d) ? String(d) : ''; }
+function normalizeDate(d) { return isIsoDate(d) ? String(d) : ''; }
 
 async function withStats(project) {
   const entries = await listTimeEntries(project.id);
@@ -72,6 +70,9 @@ async function withStats(project) {
     status: project.status || 'in_progress',
     module: project.module || '',
     deadline: project.deadline || '',
+    start_date: project.start_date || '',
+    is_poc: !!project.is_poc,
+    feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
@@ -82,6 +83,7 @@ async function withStats(project) {
     percentage_used: pct,
     within_budget: avail > 0 ? hoursUsed <= avail : null,
     has_pdf: !!project.pdf_stored,
+    time_entries: entries, // alleen gebruikt door planning-pagina voor weekly view
   };
 }
 
@@ -93,9 +95,11 @@ function buildExcel(enrichedProjects, clientsById) {
   const rows = enrichedProjects.map((p) => ({
     'Project': p.name || '',
     'Status': statusLabel(p.status),
+    'POC': p.is_poc ? 'Ja' : '',
     'Module': p.module || '',
     'Klant': clientsById[p.client_id]?.name || '',
     'Projectmanager': p.manager_name || '',
+    'Startdatum': p.start_date || '',
     'Deadline': p.deadline || '',
     'Beschikbaar (uur)': Number(p.available_hours) || 0,
     'Verbruikt (uur)': Number(p.hours_used) || 0,
@@ -105,11 +109,11 @@ function buildExcel(enrichedProjects, clientsById) {
     'Begrote omzet (€)': Math.round(((Number(p.available_hours) || 0) * (Number(p.hourly_rate) || 0)) * 100) / 100,
     'Team': (p.team || []).map((t) => t.name).join(', '),
     'Contacten': (p.contacts || []).map((c) => `${c.name}${c.email ? ' <' + c.email + '>' : ''}`).join('; '),
+    'Feature requests': p.feature_requests || '',
     'Moneybird ID': p.moneybird_project_id || '',
     'Aangemaakt': p.created_at || '',
   }));
   const ws = XLSX.utils.json_to_sheet(rows);
-  // Auto-width kolommen
   const cols = Object.keys(rows[0] || {}).map((key) => {
     const maxLen = Math.max(key.length, ...rows.map((r) => String(r[key] ?? '').length));
     return { wch: Math.min(maxLen + 2, 60) };
@@ -130,11 +134,14 @@ export default async function handler(req, res) {
       projects = projects.filter((p) => p.manager_id === user.id);
     }
     const users = await listUsers();
+    const wantsTimeEntries = req.query.with_time_entries === '1';
     const enriched = await Promise.all(
       projects.map(async (p) => {
         const stats = await withStats(p);
         const mgr = users.find((u) => u.id === p.manager_id);
-        return { ...stats, manager_name: mgr?.name || null };
+        const result = { ...stats, manager_name: mgr?.name || null };
+        if (!wantsTimeEntries) delete result.time_entries;
+        return result;
       })
     );
     enriched.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -192,7 +199,10 @@ export default async function handler(req, res) {
       contacts: normalizeContacts(b.contacts),
       status: normalizeStatus(b.status),
       module: normalizeModule(b.module),
-      deadline: normalizeDeadline(b.deadline),
+      deadline: normalizeDate(b.deadline),
+      start_date: normalizeDate(b.start_date),
+      is_poc: !!b.is_poc,
+      feature_requests: String(b.feature_requests || ''),
       notes: [],
       activity_log: [],
       phases: Array.isArray(b.phases)

@@ -1,11 +1,13 @@
-// POST /api/projects/parse-pdf — multipart upload van PDF, parse via Claude.
-// Slaat de PDF tijdelijk op onder pdf:_pending:<token>, frontend krijgt token mee om later
-// te koppelen aan een project (zie POST /api/projects).
+// POST /api/projects/parse-pdf
+//   - zonder query: parse PDF + sla op onder pending-token (voor nieuw project)
+//   - ?project_id=X: parse PDF + sla op direct op bestaand project (vervangt evt. oude)
 import crypto from 'node:crypto';
 import busboy from 'busboy';
+import { Redis } from '@upstash/redis';
 import { requireUser } from '../../lib/auth.js';
 import { parseProjectPdf } from '../../lib/claude.js';
-import { Redis } from '@upstash/redis';
+import { getProject, saveProject, savePdfBlob } from '../../lib/db.js';
+import { logActivity } from '../../lib/activity.js';
 
 const kv = Redis.fromEnv();
 
@@ -47,18 +49,48 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
     return;
   }
+
+  const targetProjectId = req.query.project_id ? String(req.query.project_id) : null;
+  let targetProject = null;
+  if (targetProjectId) {
+    targetProject = await getProject(targetProjectId);
+    if (!targetProject) {
+      res.status(404).json({ error: 'Project niet gevonden' });
+      return;
+    }
+    if (user.role !== 'admin' && targetProject.manager_id !== user.id) {
+      res.status(403).json({ error: 'Geen toegang' });
+      return;
+    }
+  }
+
   try {
     const { buffer, filename, fields } = await readFormData(req);
-    const userPrompt = fields.prompt;
-    const parsed = await parseProjectPdf(buffer, { userPrompt });
+    const parsed = await parseProjectPdf(buffer, { userPrompt: fields.prompt });
 
-    // Sla de PDF tijdelijk op zodat 'ie aan het project gekoppeld kan worden na opslaan
+    if (targetProject) {
+      // Direct opslaan onder bestaand project (vervangt oude)
+      const base64 = buffer.toString('base64');
+      await savePdfBlob(targetProject.id, base64, filename, 'application/pdf');
+      targetProject.pdf_stored = true;
+      targetProject.source_pdf_filename = filename;
+      logActivity(targetProject, user, 'pdf_uploaded', { filename });
+      await saveProject(targetProject);
+      res.status(200).json({
+        ...parsed,
+        source_pdf_filename: filename,
+        attached_to_project: targetProject.id,
+      });
+      return;
+    }
+
+    // Nieuw project flow: sla op onder pending-token
     const token = crypto.randomBytes(12).toString('hex');
     const base64 = buffer.toString('base64');
     await kv.set(
       `pdf:_pending:${token}`,
       { base64, filename, mime: 'application/pdf', saved_at: new Date().toISOString() },
-      { ex: 60 * 60 } // 1 uur TTL — daarna verlopen als er geen project van is gemaakt
+      { ex: 60 * 60 }
     );
 
     res.status(200).json({

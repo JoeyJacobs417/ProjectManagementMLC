@@ -10,7 +10,7 @@
     <h1>Klanten</h1>
     <span class="subtle" id="countLabel"></span>
   </div>
-  <p class="subtle">Overzicht van klanten met hun projecten en totale urenstatus.</p>
+  <p class="subtle">Overzicht van klanten met hun projecten en totale urenstatus. Admin-gebruikers kunnen klanten toevoegen, hernoemen en verwijderen.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
@@ -18,39 +18,146 @@
     </label>
   </div>
 
+  <div id="adminPanel" class="hidden">
+    <div class="card-static" style="margin-bottom:1rem">
+      <h3>Klanten beheren</h3>
+      <p class="subtle" style="margin-top:-.25rem">Wijzig naam en contactpersonen direct hieronder. Klik op "Klanten opslaan" om je wijzigingen door te voeren.</p>
+      <div id="clientsEdit"></div>
+      <div style="display:flex; gap:.5rem; margin-top:1rem">
+        <button class="btn btn-ghost" type="button" id="addClient">+ Klant toevoegen</button>
+        <button class="btn btn-primary" type="button" id="saveClients">Klanten opslaan</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>Overzicht</h2>
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
   const me = await renderTopbar('/clients.html');
 
-  const [{ projects }, { settings }] = await Promise.all([
+  const [{ projects }, settingsResp] = await Promise.all([
     apiGet('/api/projects'),
-    apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
+    apiGet('/api/admin/settings'),
   ]);
-  const clients = settings.clients || [];
+  const isAdmin = me?.role === 'admin';
+  let clients = settingsResp.settings.clients || [];
 
-  // Aggregeer per klant
-  const byClient = new Map();
-  for (const c of clients) {
-    byClient.set(c.id, { client: c, projects: [], totalAvailable: 0, totalUsed: 0 });
-  }
-  for (const p of projects) {
-    if (!p.client_id || !byClient.has(p.client_id)) continue;
-    const rec = byClient.get(p.client_id);
-    rec.projects.push(p);
-    rec.totalAvailable += Number(p.available_hours) || 0;
-    rec.totalUsed += Number(p.hours_used) || 0;
-  }
-  const list = Array.from(byClient.values()).sort((a, b) => a.client.name.localeCompare(b.client.name));
+  // ── Beheer (admin only) ─────────────────────────────────────────
+  if (isAdmin) {
+    document.getElementById('adminPanel').classList.remove('hidden');
+    let workingClients = JSON.parse(JSON.stringify(clients));
 
+    function renderEdit() {
+      const el = document.getElementById('clientsEdit');
+      if (workingClients.length === 0) {
+        el.innerHTML = '<p class="subtle">Nog geen klanten. Klik op "+ Klant toevoegen".</p>';
+        return;
+      }
+      el.innerHTML = workingClients.map((c, i) => {
+        const contactsRows = (c.contacts && c.contacts.length ? c.contacts : [{ name: '', email: '' }]).map((cc, j) => `
+          <tr>
+            <td><input type="text" data-cli="${i}" data-c-idx="${j}" data-c-field="name" value="${escapeHtml(cc.name || '')}" placeholder="Naam"></td>
+            <td><input type="email" data-cli="${i}" data-c-idx="${j}" data-c-field="email" value="${escapeHtml(cc.email || '')}" placeholder="email@bedrijf.nl"></td>
+            <td><button class="btn btn-ghost" type="button" data-remove-contact="${i}|${j}">Verwijder</button></td>
+          </tr>`).join('');
+        return `
+          <div style="border-top:1px solid var(--border); padding:1rem 0">
+            <div class="form-row" style="grid-template-columns:1fr auto">
+              <label>
+                <span class="lbl">Bedrijfsnaam</span>
+                <input type="text" data-cli="${i}" data-field="name" value="${escapeHtml(c.name || '')}">
+              </label>
+              <label style="align-self:end">
+                <button class="btn btn-ghost" type="button" data-remove-client="${i}">Klant verwijderen</button>
+              </label>
+            </div>
+            <table class="table" style="margin:.5rem 0 0">
+              <thead><tr><th>Contactpersoon</th><th>E-mail</th><th></th></tr></thead>
+              <tbody>${contactsRows}</tbody>
+            </table>
+            <button class="btn btn-ghost" type="button" data-add-contact="${i}" style="margin-top:.25rem">+ Contact toevoegen</button>
+          </div>`;
+      }).join('');
+
+      el.querySelectorAll('input[data-cli][data-field]').forEach((inp) => {
+        inp.oninput = () => {
+          workingClients[Number(inp.dataset.cli)][inp.dataset.field] = inp.value;
+        };
+      });
+      el.querySelectorAll('input[data-cli][data-c-idx]').forEach((inp) => {
+        inp.oninput = () => {
+          const i = Number(inp.dataset.cli);
+          const j = Number(inp.dataset.cIdx);
+          if (!workingClients[i].contacts) workingClients[i].contacts = [];
+          if (!workingClients[i].contacts[j]) workingClients[i].contacts[j] = { name: '', email: '' };
+          workingClients[i].contacts[j][inp.dataset.cField] = inp.value;
+        };
+      });
+      el.querySelectorAll('button[data-add-contact]').forEach((btn) => {
+        btn.onclick = () => {
+          const i = Number(btn.dataset.addContact);
+          if (!workingClients[i].contacts) workingClients[i].contacts = [];
+          workingClients[i].contacts.push({ name: '', email: '' });
+          renderEdit();
+        };
+      });
+      el.querySelectorAll('button[data-remove-contact]').forEach((btn) => {
+        btn.onclick = () => {
+          const [i, j] = btn.dataset.removeContact.split('|').map(Number);
+          workingClients[i].contacts.splice(j, 1);
+          renderEdit();
+        };
+      });
+      el.querySelectorAll('button[data-remove-client]').forEach((btn) => {
+        btn.onclick = () => {
+          const i = Number(btn.dataset.removeClient);
+          if (!confirm(`"${workingClients[i].name || 'deze klant'}" verwijderen?`)) return;
+          workingClients.splice(i, 1);
+          renderEdit();
+        };
+      });
+    }
+    renderEdit();
+
+    document.getElementById('addClient').onclick = () => {
+      workingClients.push({ name: '', contacts: [{ name: '', email: '' }] });
+      renderEdit();
+    };
+    document.getElementById('saveClients').onclick = async () => {
+      try {
+        const r = await apiSend('/api/admin/settings', 'POST', { clients: workingClients });
+        clients = r.settings.clients || [];
+        workingClients = JSON.parse(JSON.stringify(clients));
+        toast('Klanten opgeslagen', 'success');
+        renderEdit();
+        renderOverview();
+      } catch (err) { toast(err.message, 'error'); }
+    };
+  }
+
+  // ── Overzicht ────────────────────────────────────────────────────
   const search = document.getElementById('searchInput');
   const STORAGE_KEY = 'pm_clients_query';
   search.value = sessionStorage.getItem(STORAGE_KEY) || '';
 
-  function render() {
+  function renderOverview() {
     const q = search.value.trim().toLowerCase();
     sessionStorage.setItem(STORAGE_KEY, q);
+
+    const byClient = new Map();
+    for (const c of clients) {
+      byClient.set(c.id, { client: c, projects: [], totalAvailable: 0, totalUsed: 0 });
+    }
+    for (const p of projects) {
+      if (!p.client_id || !byClient.has(p.client_id)) continue;
+      const rec = byClient.get(p.client_id);
+      rec.projects.push(p);
+      rec.totalAvailable += Number(p.available_hours) || 0;
+      rec.totalUsed += Number(p.hours_used) || 0;
+    }
+    const list = Array.from(byClient.values()).sort((a, b) => a.client.name.localeCompare(b.client.name));
 
     const matches = q
       ? list.filter(({ client }) => {
@@ -63,7 +170,7 @@
 
     const c = document.getElementById('content');
     if (list.length === 0) {
-      c.innerHTML = `<p class="subtle">Nog geen klanten. <a href="/admin-settings.html">Voeg klanten toe in Instellingen</a>.</p>`;
+      c.innerHTML = `<p class="subtle">Nog geen klanten.${isAdmin ? ' Gebruik het beheer-paneel hierboven om er een toe te voegen.' : ''}</p>`;
       return;
     }
     if (matches.length === 0) {
@@ -99,7 +206,7 @@
               <tbody>
                 ${projects.map((p) => `
                   <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
-                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
                     <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
                     <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
                     <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
@@ -114,7 +221,7 @@
     }
   }
 
-  search.addEventListener('input', render);
-  render();
+  search.addEventListener('input', renderOverview);
+  renderOverview();
 </script>
 </body></html>

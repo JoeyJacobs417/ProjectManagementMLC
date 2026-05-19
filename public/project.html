@@ -59,14 +59,19 @@
 
     c.innerHTML = `
       <div class="page-header">
-        <div>
+        <div style="flex:1">
           <div class="card-header-row" style="margin-bottom:.25rem">
-            <h1 style="margin:0">${escapeHtml(project.name)}</h1>
+            <h1 id="projectTitle" style="margin:0">${escapeHtml(project.name)}</h1>
+            <button class="btn btn-ghost" id="renameBtn" style="font-size:.8rem; padding:.3rem .6rem">✏ Hernoem</button>
             <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
             ${project.module ? `<span class="badge badge-blue">${escapeHtml(project.module)}</span>` : ''}
+            ${project.is_poc ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>` : ''}
             ${project.deadline ? deadlineBadge(project.deadline) : ''}
           </div>
-          <p class="subtle">PM: ${escapeHtml(project.manager_name || '—')}${clientName ? ` · Klant: ${escapeHtml(clientName)}` : ''}</p>
+          <p class="subtle">
+            PM: ${escapeHtml(project.manager_name || '—')}${clientName ? ` · Klant: ${escapeHtml(clientName)}` : ''}
+            ${project.start_date ? ` · Start: ${fmtDate(project.start_date)}` : ''}
+          </p>
         </div>
         <div style="display:flex; gap:.5rem">
           ${project.has_pdf ? `<a class="btn btn-ghost" href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>⬇ Offerte-PDF</a>` : ''}
@@ -79,6 +84,7 @@
           <h3>Beschrijving</h3>
           <p>${escapeHtml(project.description || '—')}</p>
           ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
+          ${project.feature_requests ? `<h3>Feature requests</h3><p style="white-space:pre-wrap">${escapeHtml(project.feature_requests)}</p>` : ''}
           ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
           ${(project.contacts && project.contacts.length) ? `
             <h3>Contactpersonen</h3>
@@ -89,10 +95,11 @@
             </ul>` : ''}
         </div>
         <div class="card-static">
-          <h3>Uren & Deadline</h3>
+          <h3>Uren & Planning</h3>
           <p><strong>Verbruikt:</strong> ${project.hours_used.toFixed(1)} uur</p>
           <p><strong>Beschikbaar:</strong> ${(project.available_hours || 0).toFixed(1)} uur</p>
           <p><strong>Uurtarief:</strong> € ${(project.hourly_rate || 0).toFixed(2)}</p>
+          ${project.start_date ? `<p><strong>Startdatum:</strong> ${fmtDate(project.start_date)}</p>` : ''}
           ${project.deadline ? `<p><strong>Deadline:</strong> ${fmtDate(project.deadline)}</p>` : ''}
           <div class="progress big">
             <div class="progress-bar ${progressBarClass(project.percentage_used)}" style="width:${Math.min(project.percentage_used, 100)}%"></div>
@@ -121,14 +128,23 @@
         </div>
       </div>
 
+      <h2>Offerte / voorstel-PDF</h2>
+      <div class="card-static">
+        ${project.has_pdf
+          ? `<p>Er is een PDF opgeslagen: <strong>${escapeHtml(project.source_pdf_filename || 'offerte.pdf')}</strong>.
+             <a href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>Download</a>.</p>`
+          : '<p class="subtle">Nog geen PDF gekoppeld aan dit project.</p>'}
+        <form id="pdfUploadForm" class="form" style="margin-top:.5rem">
+          <label>${project.has_pdf ? 'Vervang' : 'Upload'} PDF (offerte / aangepaste versie)
+            <input type="file" name="pdf" accept="application/pdf" required>
+          </label>
+          <div><button class="btn btn-primary" type="submit">Upload PDF</button></div>
+        </form>
+      </div>
+
       <div class="card-static" style="margin-top:1rem">
         <h3>Project bewerken</h3>
         <form id="editForm" class="form">
-          <label>
-            <span class="lbl">Projectnaam</span>
-            <input type="text" name="name" value="${escapeHtml(project.name)}" required>
-          </label>
-
           <label>Korte beschrijving<textarea name="description" rows="3">${escapeHtml(project.description || '')}</textarea></label>
 
           <div class="form-row">
@@ -149,23 +165,33 @@
               <span class="lbl">Klant</span>
               <select name="client_id">${clientOptions}</select>
             </label>
+            <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
+              <input type="checkbox" name="is_poc" style="width:auto" ${project.is_poc ? 'checked' : ''}> Dit is een POC
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label>
+              <span class="lbl">Startdatum</span>
+              <input type="date" name="start_date" value="${escapeHtml(project.start_date || '')}">
+            </label>
             <label>
               <span class="lbl">Deadline</span>
               <input type="date" name="deadline" value="${escapeHtml(project.deadline || '')}">
             </label>
-          </div>
-
-          ${canEditManager ? `
-            <div class="form-row">
+            ${canEditManager ? `
               <label>
                 <span class="lbl">Projectmanager</span>
                 <select name="manager_id">${managerOptions}</select>
-              </label>
-              <label></label>
-              <label></label>
-            </div>` : ''}
+              </label>` : '<label></label>'}
+          </div>
 
           <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
+
+          <label>
+            <span class="lbl">Feature requests</span>
+            <textarea name="feature_requests" rows="5" placeholder="Wat moet er gebouwd worden om dit project te laten slagen?">${escapeHtml(project.feature_requests || '')}</textarea>
+          </label>
 
           <h4>Contactpersonen bij de klant</h4>
           <table class="table">
@@ -175,7 +201,6 @@
           <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
           <h4>Team</h4>
-          <p class="subtle" style="margin-top:-.4rem">Selecteer alle medewerkers die aan dit project werken.</p>
           <div id="teamGrid" class="checkbox-grid"><span class="subtle">Medewerkers laden…</span></div>
 
           <div style="margin-top:1rem">
@@ -207,7 +232,7 @@
 
       <h2>Uren in de tijd</h2>
       <div class="card-static"><canvas id="hoursOverTime" height="120"></canvas></div>
-      <h2>Uren per medewerker (alle hours-schrijvers)</h2>
+      <h2>Uren per medewerker</h2>
       <div class="card-static"><canvas id="hoursPerUser" height="120"></canvas></div>
 
       <h2>Activiteit</h2>
@@ -225,6 +250,20 @@
       </div>
     `;
 
+    // Hernoem button — inline rename
+    document.getElementById('renameBtn').onclick = async () => {
+      const newName = prompt('Nieuwe projectnaam:', project.name);
+      if (newName === null) return;
+      const trimmed = newName.trim();
+      if (!trimmed) { toast('Naam mag niet leeg zijn', 'error'); return; }
+      if (trimmed === project.name) return;
+      try {
+        await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { name: trimmed });
+        toast('Naam aangepast', 'success');
+        await load();
+      } catch (err) { toast(err.message, 'error'); }
+    };
+
     document.getElementById('syncBtn').onclick = async () => {
       try {
         const r = await apiSend(`/api/projects/${encodeURIComponent(id)}/sync`, 'POST');
@@ -233,7 +272,7 @@
       } catch (err) { toast(err.message, 'error'); }
     };
 
-    // Notities
+    // Notitie toevoegen
     document.getElementById('noteForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const text = e.target.elements.text.value.trim();
@@ -255,6 +294,21 @@
         } catch (err) { toast(err.message, 'error'); }
       };
     }
+
+    // PDF upload (re-upload op bestaand project)
+    document.getElementById('pdfUploadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const file = e.target.querySelector('input[name=pdf]').files[0];
+      if (!file) { toast('Selecteer een PDF', 'error'); return; }
+      const fd = new FormData();
+      fd.append('pdf', file);
+      toast('PDF wordt geüpload…', 'info');
+      try {
+        await apiSend(`/api/projects/parse-pdf?project_id=${encodeURIComponent(id)}`, 'POST', fd, true);
+        toast('PDF opgeslagen op project', 'success');
+        await load();
+      } catch (err) { toast(err.message, 'error'); }
+    });
 
     // Team
     const teamGrid = document.getElementById('teamGrid');
@@ -308,15 +362,17 @@
         contacts.push({ name, email });
       }
       const body = {
-        name: f.get('name'),
         description: f.get('description'),
         available_hours: Number(f.get('available_hours')) || 0,
         hourly_rate: Number(f.get('hourly_rate')) || 0,
         exceptions: f.get('exceptions'),
+        feature_requests: f.get('feature_requests'),
         status: f.get('status'),
         module: f.get('module'),
         client_id: f.get('client_id') || '',
         deadline: f.get('deadline') || '',
+        start_date: f.get('start_date') || '',
+        is_poc: f.get('is_poc') === 'on',
         contacts,
         team,
       };

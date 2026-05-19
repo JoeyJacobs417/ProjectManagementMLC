@@ -66,7 +66,6 @@ export function statusLabel(value) {
   return opt ? opt.label : value;
 }
 
-// ── Datum-helpers ──────────────────────────────────────────────────
 export function fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = String(iso).split('-');
@@ -92,7 +91,6 @@ export function deadlineBadge(iso) {
   return `<span class="badge badge-blue">${fmtDate(iso)} (${d}d)</span>`;
 }
 
-// ── Activity log labels ────────────────────────────────────────────
 const ACTION_LABELS = {
   created: 'Project aangemaakt',
   name_changed: 'Naam gewijzigd',
@@ -102,32 +100,30 @@ const ACTION_LABELS = {
   module_changed: 'Module gewijzigd',
   manager_changed: 'Projectmanager gewijzigd',
   deadline_changed: 'Deadline gewijzigd',
+  start_date_changed: 'Startdatum gewijzigd',
   client_changed: 'Klant gewijzigd',
+  poc_changed: 'POC-status gewijzigd',
+  feature_requests_changed: 'Feature requests bijgewerkt',
   team_added: 'Teamlid toegevoegd',
   team_removed: 'Teamlid verwijderd',
   note_added: 'Notitie toegevoegd',
   note_deleted: 'Notitie verwijderd',
   pdf_deleted: 'Offerte-PDF verwijderd',
+  pdf_uploaded: 'Offerte-PDF geüpload',
 };
 
 export function activityDescription(entry) {
   const label = ACTION_LABELS[entry.action] || entry.action;
   const d = entry.details || {};
-  if (entry.action === 'status_changed') {
-    return `${label}: ${statusLabel(d.from)} → ${statusLabel(d.to)}`;
-  }
-  if (entry.action === 'available_hours_changed' || entry.action === 'hourly_rate_changed') {
-    return `${label}: ${d.from} → ${d.to}`;
-  }
-  if (entry.action === 'name_changed' || entry.action === 'module_changed') {
-    return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
-  }
-  if (entry.action === 'deadline_changed') {
+  if (entry.action === 'status_changed') return `${label}: ${statusLabel(d.from)} → ${statusLabel(d.to)}`;
+  if (entry.action === 'available_hours_changed' || entry.action === 'hourly_rate_changed') return `${label}: ${d.from} → ${d.to}`;
+  if (entry.action === 'name_changed' || entry.action === 'module_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  if (entry.action === 'deadline_changed' || entry.action === 'start_date_changed') {
     return `${label}: ${d.from ? fmtDate(d.from) : '—'} → ${d.to ? fmtDate(d.to) : '—'}`;
   }
-  if (entry.action === 'team_added' || entry.action === 'team_removed') {
-    return `${label}: ${d.name || ''}`;
-  }
+  if (entry.action === 'team_added' || entry.action === 'team_removed') return `${label}: ${d.name || ''}`;
+  if (entry.action === 'poc_changed') return `${label}: ${d.to ? 'Ja' : 'Nee'}`;
+  if (entry.action === 'pdf_uploaded') return `${label}: ${d.filename || ''}`;
   return label;
 }
 

@@ -21,7 +21,8 @@
       </label>
       <p class="subtle" style="margin-top:-.5rem">
         Tweak deze tekst als je offerte een afwijkend formaat heeft. Wordt onthouden voor je volgende upload.
-        <a href="#" id="resetPromptBtn">Herstel naar default</a>.
+        <a href="#" id="resetPromptBtn">Herstel naar default</a>
+        <span id="saveDefaultWrapper" class="hidden"> · <a href="#" id="saveDefaultBtn">Sla op als organisatie-default</a></span>
       </p>
 
       <button class="btn btn-primary" type="submit">Lees PDF in met Claude</button>
@@ -71,10 +72,21 @@
           <span class="lbl">Klant</span>
           <select name="client_id" id="clientField"><option value="">— Geen —</option></select>
         </label>
+        <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
+          <input type="checkbox" name="is_poc" style="width:auto"> Dit is een POC (proof-of-concept)
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label>
+          <span class="lbl">Startdatum</span>
+          <input type="date" name="start_date">
+        </label>
         <label>
           <span class="lbl">Deadline</span>
           <input type="date" name="deadline">
         </label>
+        <label></label>
       </div>
 
       <div class="form-row">
@@ -90,8 +102,13 @@
 
       <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3"></textarea></label>
 
+      <label>
+        <span class="lbl">Feature requests</span>
+        <textarea name="feature_requests" rows="4" placeholder="Wat moet er gebouwd worden voor deze klant om het project te laten slagen? Lijstje feature requests."></textarea>
+      </label>
+
       <h4>Contactpersonen bij de klant</h4>
-      <p class="subtle" style="margin-top:-.5rem">Naam + e-mailadres. Meerdere mogelijk. Klant kiezen vult deze automatisch met de contacten die bij die klant horen.</p>
+      <p class="subtle" style="margin-top:-.5rem">Klant kiezen vult deze automatisch met de contacten die bij die klant horen.</p>
       <table class="table">
         <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
         <tbody id="contactsBody">
@@ -143,11 +160,10 @@
     statusSel.appendChild(o);
   }
 
-  // Settings (voor prompt + clients)
   let settings = { clients: [], pdf_prompt: '' };
   try { ({ settings } = await apiGet('/api/admin/settings')); } catch {}
 
-  // Klanten dropdown
+  // Klant dropdown + autofill contacten
   const clientSel = document.getElementById('clientField');
   (settings.clients || []).forEach((c) => {
     const o = document.createElement('option');
@@ -155,7 +171,6 @@
     clientSel.appendChild(o);
   });
   clientSel.onchange = () => {
-    // Vul contactpersonen automatisch
     const client = (settings.clients || []).find((c) => c.id === clientSel.value);
     if (!client || !Array.isArray(client.contacts) || client.contacts.length === 0) return;
     if (!confirm(`Contactpersonen van "${client.name}" overnemen?`)) return;
@@ -193,6 +208,18 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     sessionStorage.removeItem(PROMPT_STORAGE_KEY);
     toast('Prompt teruggezet naar standaard', 'info');
   };
+
+  // "Sla op als organisatie-default" — alleen admin
+  if (me.role === 'admin') {
+    document.getElementById('saveDefaultWrapper').classList.remove('hidden');
+    document.getElementById('saveDefaultBtn').onclick = async (e) => {
+      e.preventDefault();
+      try {
+        await apiSend('/api/admin/settings', 'POST', { pdf_prompt: promptField.value });
+        toast('Prompt opgeslagen als organisatie-default', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    };
+  }
 
   // Managers
   let managers = [];
@@ -239,7 +266,6 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     })
     .catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout bij laden: ${err.message}</span>`; });
 
-  // Contacten
   function bindContactRow(tr) {
     const removeBtn = tr.querySelector('[data-remove]');
     if (removeBtn) {
@@ -362,6 +388,9 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       module: f.get('module') || '',
       client_id: f.get('client_id') || '',
       deadline: f.get('deadline') || '',
+      start_date: f.get('start_date') || '',
+      is_poc: f.get('is_poc') === 'on',
+      feature_requests: f.get('feature_requests') || '',
       contacts,
       team,
       phases,

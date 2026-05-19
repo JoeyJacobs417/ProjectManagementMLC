@@ -2,7 +2,7 @@
 // GET   /api/projects/:id?action=download_pdf   - serveert de opgeslagen PDF
 // PATCH /api/projects/:id                       - update editable fields (auto-logt wijzigingen)
 // PATCH /api/projects/:id  body { add_note:{ text } }     - voeg notitie toe
-// PATCH /api/projects/:id  body { delete_note:{ id } }    - verwijder notitie (admin of auteur)
+// PATCH /api/projects/:id  body { delete_note:{ id } }    - verwijder notitie
 // PATCH /api/projects/:id  body { delete_pdf: true }      - verwijder opgeslagen PDF
 import crypto from 'node:crypto';
 import { requireUser } from '../../../lib/auth.js';
@@ -20,7 +20,7 @@ const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 const EDITABLE_FIELDS = [
   'name', 'description', 'available_hours', 'hourly_rate',
-  'exceptions', 'manager_id', 'client_id', 'deadline',
+  'exceptions', 'manager_id', 'client_id', 'feature_requests',
 ];
 
 function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
@@ -71,6 +71,9 @@ async function buildDetail(project) {
     status: project.status || 'in_progress',
     module: project.module || '',
     deadline: project.deadline || '',
+    start_date: project.start_date || '',
+    is_poc: !!project.is_poc,
+    feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
@@ -176,7 +179,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── Reguliere update (met auto-activity-log) ─────────────────
+    // ── Reguliere update met auto-activity-log ──────────────────
     const before = JSON.parse(JSON.stringify(project));
     for (const f of EDITABLE_FIELDS) {
       if (b[f] !== undefined) project[f] = b[f];
@@ -189,9 +192,9 @@ export default async function handler(req, res) {
       const m = String(b.module || '').trim();
       project.module = VALID_MODULES.includes(m) ? m : '';
     }
-    if (b.deadline !== undefined) {
-      project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
-    }
+    if (b.deadline !== undefined) project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
+    if (b.start_date !== undefined) project.start_date = isIsoDate(b.start_date) ? String(b.start_date) : '';
+    if (b.is_poc !== undefined) project.is_poc = !!b.is_poc;
     if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
     if (typeof project.available_hours === 'string') project.available_hours = Number(project.available_hours) || 0;

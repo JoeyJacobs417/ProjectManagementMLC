@@ -93,6 +93,7 @@ export default async function handler(req, res) {
     if (b.threshold_critical !== undefined) patch.threshold_critical = Number(b.threshold_critical) || 95;
     if (b.threshold_exceeded !== undefined) patch.threshold_exceeded = Number(b.threshold_exceeded) || 100;
     if (b.inactivity_days !== undefined) patch.inactivity_days = Number(b.inactivity_days) || 30;
+    if (b.deadline_alert_days !== undefined) patch.deadline_alert_days = Number(b.deadline_alert_days) || 14;
     if (b.notify_emails_extra !== undefined) patch.notify_emails_extra = String(b.notify_emails_extra || '').trim();
     if (b.pdf_prompt !== undefined) patch.pdf_prompt = String(b.pdf_prompt || '').trim();
     if (b.report_period !== undefined) {

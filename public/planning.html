@@ -7,7 +7,7 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <h1>Planning</h1>
-  <p class="subtle">Per medewerker: actieve projecten, resterende uren, vakantie en geschatte einddatum.</p>
+  <p class="subtle">Per medewerker: actieve projecten, resterende uren, vakantie, weekoverzicht en geschatte einddatum.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
@@ -25,47 +25,16 @@
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel } from '/app.js';
   const me = await renderTopbar('/planning.html');
 
+  // Time entries meeladen voor weekly view
   const [{ projects }, { settings }] = await Promise.all([
-    apiGet('/api/projects'),
+    apiGet('/api/projects?with_time_entries=1'),
     apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
   ]);
   const capacities = settings.employee_capacities || {};
   const vacationsByEmp = settings.employee_vacations || {};
   const isAdmin = me?.role === 'admin';
 
-  // Groepeer projecten per medewerker
-  const byEmp = new Map();
-  for (const p of projects) {
-    if (p.status === 'done') continue;
-    for (const t of (p.team || [])) {
-      const key = t.moneybird_user_id;
-      if (!byEmp.has(key)) {
-        byEmp.set(key, { id: key, name: t.name, rows: [], totalOwn: 0, totalRemaining: 0, newCount: 0 });
-      }
-      const rec = byEmp.get(key);
-      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
-      const ownHours = stat ? Number(stat.hours) || 0 : 0;
-      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
-      rec.rows.push({ project: p, ownHours, remaining });
-      rec.totalOwn += ownHours;
-      rec.totalRemaining += remaining;
-      if (p.status === 'future') rec.newCount += 1;
-    }
-  }
-  const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
-
-  // Filter dropdown vullen
-  const empFilter = document.getElementById('empFilter');
-  for (const e of employees) {
-    const o = document.createElement('option');
-    o.value = e.id;
-    o.textContent = e.name;
-    empFilter.appendChild(o);
-  }
-  const STORAGE_KEY = 'pm_planning_emp_filter';
-  empFilter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
-
-  // ── Datum/vakantie helpers ─────────────────────────────────────
+  // ── Datum-helpers ─────────────────────────────────────────────
   function todayIso() {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -83,13 +52,26 @@
     const [y, m, d] = iso.split('-');
     return `${d}-${m}-${y}`;
   }
+  function fmtDateShort(iso) {
+    if (!iso) return '';
+    const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+    const [y, m, d] = iso.split('-');
+    return `${Number(d)} ${months[Number(m)-1]}`;
+  }
   function isWeekend(d) { return d.getDay() === 0 || d.getDay() === 6; }
   function isOnVacation(iso, periods) {
     return (periods || []).some((p) => p.start <= iso && iso <= p.end);
   }
+  function mondayOf(date) {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const dow = d.getDay();
+    const diff = dow === 0 ? -6 : 1 - dow; // ma=1
+    d.setDate(d.getDate() + diff);
+    return d;
+  }
 
   function vacationDaysInRange(periods, startIso, endIso) {
-    // Tel werkdagen (ma-vr) die binnen een vakantieperiode + [startIso, endIso] vallen.
     if (!periods || periods.length === 0) return 0;
     let count = 0;
     for (const p of periods) {
@@ -114,7 +96,7 @@
     let d = new Date();
     d.setHours(0, 0, 0, 0);
     let worked = 0;
-    let safety = 365 * 5; // max 5 jaar zoeken
+    let safety = 365 * 5;
     while (worked < workDaysNeeded && safety-- > 0) {
       const iso = dateToIso(d);
       if (!isWeekend(d) && !isOnVacation(iso, periods)) {
@@ -126,7 +108,77 @@
     return null;
   }
 
-  // ── Render ──────────────────────────────────────────────────────
+  // ── Groepeer projecten per medewerker ─────────────────────────
+  const byEmp = new Map();
+  for (const p of projects) {
+    if (p.status === 'done') continue;
+    for (const t of (p.team || [])) {
+      const key = t.moneybird_user_id;
+      if (!byEmp.has(key)) {
+        byEmp.set(key, { id: key, name: t.name, rows: [], totalOwn: 0, totalRemaining: 0, newCount: 0 });
+      }
+      const rec = byEmp.get(key);
+      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
+      const ownHours = stat ? Number(stat.hours) || 0 : 0;
+      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
+      rec.rows.push({ project: p, ownHours, remaining });
+      rec.totalOwn += ownHours;
+      rec.totalRemaining += remaining;
+      if (p.status === 'future') rec.newCount += 1;
+    }
+  }
+  const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
+
+  // ── Filter dropdown vullen ────────────────────────────────────
+  const empFilter = document.getElementById('empFilter');
+  for (const e of employees) {
+    const o = document.createElement('option');
+    o.value = e.id; o.textContent = e.name;
+    empFilter.appendChild(o);
+  }
+  const STORAGE_KEY = 'pm_planning_emp_filter';
+  empFilter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
+
+  // ── Weekly hours per medewerker ────────────────────────────────
+  // Voor laatste N weken: per (empId, weekStartIso, projectId) -> hours
+  const WEEKS_BACK = 4;
+  function buildWeeklyForEmployee(empId) {
+    // verzamel time entries van deze persoon, gegroepeerd per (weekStart, projectId)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const thisMonday = mondayOf(today);
+    const weekStarts = [];
+    for (let i = WEEKS_BACK - 1; i >= 0; i--) {
+      const d = new Date(thisMonday);
+      d.setDate(d.getDate() - 7 * i);
+      weekStarts.push(dateToIso(d));
+    }
+    // map: weekIso -> Map<projectId, hours>
+    const weekMap = new Map(weekStarts.map((w) => [w, new Map()]));
+    for (const p of projects) {
+      const entries = p.time_entries || [];
+      for (const e of entries) {
+        if (e.user_moneybird_id !== empId || !e.started_at) continue;
+        const entryDate = new Date(String(e.started_at).slice(0, 10));
+        const monday = dateToIso(mondayOf(entryDate));
+        if (!weekMap.has(monday)) continue;
+        const projMap = weekMap.get(monday);
+        projMap.set(p.id, (projMap.get(p.id) || 0) + (Number(e.hours) || 0));
+      }
+    }
+    return weekStarts.map((w) => ({
+      weekStart: w,
+      perProject: Array.from(weekMap.get(w).entries())
+        .map(([pid, hours]) => {
+          const pr = projects.find((x) => x.id === pid);
+          return { project_id: pid, project_name: pr ? pr.name : 'Onbekend', hours };
+        })
+        .sort((a, b) => b.hours - a.hours),
+      total: Array.from(weekMap.get(w).values()).reduce((a, h) => a + h, 0),
+    }));
+  }
+
+  // ── Render ────────────────────────────────────────────────────
   function render() {
     const value = empFilter.value;
     sessionStorage.setItem(STORAGE_KEY, value);
@@ -156,12 +208,12 @@
         if (completion) {
           const completionIso = dateToIso(completion);
           const vacationDays = vacationDaysInRange(upcoming, today, completionIso);
-          estimateHtml = `${baseWeeks} weken werk · verwacht klaar <strong>${fmtDate(completionIso)}</strong>${vacationDays > 0 ? ` (incl. ${vacationDays} ${vacationDays === 1 ? 'vakantiedag' : 'vakantiedagen'} in deze periode)` : ''}`;
+          estimateHtml = `${baseWeeks} weken werk · verwacht klaar <strong>${fmtDate(completionIso)}</strong>${vacationDays > 0 ? ` (incl. ${vacationDays} ${vacationDays === 1 ? 'vakantiedag' : 'vakantiedagen'})` : ''}`;
         } else {
           estimateHtml = `${baseWeeks} weken werk`;
         }
       } else if (e.totalRemaining === 0) {
-        estimateHtml = '<span class="subtle">niets meer te doen op de openstaande projecten</span>';
+        estimateHtml = '<span class="subtle">niets meer te doen</span>';
       }
 
       const vacationListHtml = upcoming.length === 0
@@ -172,13 +224,43 @@
               ${isAdmin ? `<a href="#" data-remove-vac="${e.id}|${i}" style="margin-left:.5rem; color:inherit; text-decoration:none">×</a>` : ''}
             </span>`).join('');
 
+      // Weekly breakdown
+      const weeks = buildWeeklyForEmployee(e.id);
+      const weeklyHtml = `
+        <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
+        <table class="table" style="margin:0">
+          <thead><tr>
+            <th>Week (ma)</th>
+            <th>Projecten waar uren geschreven zijn</th>
+            <th>Totaal</th>
+            <th>vs. capaciteit</th>
+          </tr></thead>
+          <tbody>
+            ${weeks.map((w) => {
+              const dist = w.perProject.length === 0
+                ? '<span class="subtle">geen uren</span>'
+                : w.perProject.map((pp) => `<span class="badge badge-gray" style="margin-right:.25rem">${escapeHtml(pp.project_name)}: ${pp.hours.toFixed(1)}u</span>`).join('');
+              const capCmp = cap > 0
+                ? `<span class="badge ${w.total >= cap ? 'badge-green' : w.total >= cap * 0.6 ? 'badge-orange' : 'badge-red'}">${w.total.toFixed(1)} / ${cap}u</span>`
+                : '<span class="subtle">—</span>';
+              return `
+                <tr>
+                  <td>${fmtDateShort(w.weekStart)}</td>
+                  <td>${dist}</td>
+                  <td><strong>${w.total.toFixed(1)}u</strong></td>
+                  <td>${capCmp}</td>
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+
       return `
         <div class="card-static" style="margin-bottom:1.25rem" data-emp-id="${e.id}">
           <div class="card-header" style="margin-bottom:.75rem">
             <h2 style="margin:0">${escapeHtml(e.name)}</h2>
             <div class="subtle" style="text-align:right">
               <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
-              <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur project-budget resterend</div>
+              <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur budget resterend</div>
               <div>Capaciteit: <strong>${cap > 0 ? cap + ' uur/week' : '—'}</strong></div>
               <div>${estimateHtml}</div>
               ${e.newCount > 0 ? `<div><span class="badge status-future">${e.newCount} nieuwe ${e.newCount === 1 ? 'toewijzing' : 'toewijzingen'}</span></div>` : ''}
@@ -206,13 +288,14 @@
               </div>` : ''}
           </div>
 
+          <h4 style="margin-top:1rem">Toegewezen projecten</h4>
           <table class="table" style="margin:0">
             <thead><tr>
               <th>Project</th>
               <th>Module</th>
               <th>Status</th>
               <th>Uren door ${escapeHtml(e.name)}</th>
-              <th>Resterend op project</th>
+              <th>Resterend</th>
               <th>Totaal</th>
             </tr></thead>
             <tbody>
@@ -220,7 +303,7 @@
                 const p = row.project;
                 return `
                   <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
-                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
                     <td>${p.module ? `<span class="badge badge-blue">${escapeHtml(p.module)}</span>` : '<span class="subtle">—</span>'}</td>
                     <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
                     <td>${row.ownHours.toFixed(1)} u</td>
@@ -230,15 +313,15 @@
               }).join('')}
             </tbody>
           </table>
+
+          ${weeklyHtml}
         </div>`;
     }).join('');
 
-    // Project rows klikbaar maken
     for (const tr of c.querySelectorAll('tr.clickable')) {
       tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
     }
 
-    // Vakantie toevoegen
     for (const btn of c.querySelectorAll('button[data-add-vac]')) {
       btn.onclick = async () => {
         const empId = btn.dataset.addVac;
@@ -251,7 +334,6 @@
       };
     }
 
-    // Vakantie verwijderen
     for (const link of c.querySelectorAll('a[data-remove-vac]')) {
       link.onclick = async (ev) => {
         ev.preventDefault();
@@ -265,12 +347,10 @@
 
   async function saveVacations(empId, list) {
     const next = { ...vacationsByEmp, [empId]: list };
-    // Lege lijsten weghalen om de KV-store schoon te houden
     if (list.length === 0) delete next[empId];
     try {
       await apiSend('/api/admin/settings', 'POST', { employee_vacations: next });
       Object.assign(vacationsByEmp, next);
-      // Verwijder ook eventueel oude entries die nu weg zijn
       for (const k of Object.keys(vacationsByEmp)) {
         if (!(k in next)) delete vacationsByEmp[k];
       }
@@ -283,7 +363,7 @@
 
   if (employees.length === 0) {
     document.getElementById('content').innerHTML =
-      `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten (met status "In progress", "On hold" of "Future"). Wijs medewerkers toe via de project-detail pagina.</p>`;
+      `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten. Wijs medewerkers toe via de project-detail pagina.</p>`;
   } else {
     render();
   }
