@@ -12,7 +12,7 @@
   <p class="subtle">Configureer wanneer er automatische waarschuwingsmails verstuurd worden.</p>
   <div class="card-static">
     <form id="settingsForm" class="form">
-      <h4>Urenverbruik</h4>
+      <h4>Urenverbruik (per project)</h4>
       <div class="form-row">
         <label>Waarschuwing bij (%)<input type="number" step="0.1" name="threshold_warning"></label>
         <label>Kritiek bij (%)<input type="number" step="0.1" name="threshold_critical"></label>
@@ -24,12 +24,14 @@
         <input type="number" step="1" name="inactivity_days" style="width:100px;display:inline-block;margin:0 .4rem"> dagen niets aan heeft gedaan
       </label>
 
-      <h4>Extra mailontvangers (alle waarschuwingen)</h4>
-      <label>Komma-gescheiden e-mailadressen
+      <h4>Ontvangers van urenverbruik- en inactiviteits-mails</h4>
+      <p class="subtle" style="margin-top:-.5rem">Deze mails gaan altijd automatisch naar de <strong>projectmanager van het betreffende project</strong> en naar alle <strong>actieve admins</strong>. Hieronder kun je extra mailadressen opgeven die deze mails óók moeten ontvangen.</p>
+      <label>Extra ontvangers (komma-gescheiden)
         <input type="text" name="notify_emails_extra" placeholder="bv. directie@bedrijf.nl, finance@bedrijf.nl"></label>
+      <div class="subtle" id="recipientsPreview" style="background:var(--bg-soft); padding:.6rem .85rem; border-radius:8px; font-size:.85rem"></div>
 
       <h4>Periodieke rapportage</h4>
-      <p class="subtle" style="margin-top:-.4rem">Verstuurt automatisch een samenvatting van alle "In progress" projecten met urenstatus.</p>
+      <p class="subtle" style="margin-top:-.4rem">Verstuurt automatisch een samenvatting van alle "In progress" projecten met urenstatus. <strong>Let op:</strong> de ontvangers van de rapportage zijn alleen wie je hieronder invult — geen automatische PM/admin-lijst.</p>
       <div class="form-row">
         <label>Periode
           <select name="report_period">
@@ -44,7 +46,7 @@
         <label></label>
       </div>
       <div>
-        <button class="btn btn-ghost" type="button" id="testReportBtn">Verstuur test-rapportage nu</button>
+        <button class="btn btn-ghost" type="button" id="testReportBtn">Sla op & verstuur test-rapportage</button>
       </div>
 
       <h4>PDF-prompt voor Claude</h4>
@@ -56,7 +58,7 @@
   </div>
 
   <h2 style="margin-top:3rem">Capaciteit per medewerker</h2>
-  <p class="subtle">Hoeveel uur per week kan iedere medewerker schrijven? Wordt gebruikt op de Planning-pagina om vooruit te schatten hoeveel weken werk er nog ligt.</p>
+  <p class="subtle">Hoeveel uur per week kan iedere medewerker schrijven? Gebruikt op de Planning-pagina.</p>
   <div class="card-static">
     <form id="capacitiesForm" class="form">
       <div id="capacitiesGrid"><span class="subtle">Medewerkers laden…</span></div>
@@ -93,8 +95,13 @@
   const me = await renderTopbar('/admin-settings.html');
   if (!me || me.role !== 'admin') location.href = '/dashboard.html';
 
-  // ── Settings laden ──────────────────────────────────────────────
-  const { settings } = await apiGet('/api/admin/settings');
+  // ── Settings + users laden ──────────────────────────────────────
+  const [{ settings }, { users: allUsers }] = await Promise.all([
+    apiGet('/api/admin/settings'),
+    apiGet('/api/admin/users').catch(() => ({ users: [] })),
+  ]);
+  const activeAdmins = (allUsers || []).filter((u) => u.role === 'admin' && u.active);
+
   for (const k of [
     'threshold_warning', 'threshold_critical', 'threshold_exceeded',
     'inactivity_days', 'notify_emails_extra',
@@ -104,30 +111,56 @@
     if (el) el.value = settings[k] ?? '';
   }
 
+  // ── Recipients preview (urenverbruik + inactiviteit) ────────────
+  function updateRecipientsPreview() {
+    const extra = (document.querySelector('[name=notify_emails_extra]').value || '')
+      .split(',').map((s) => s.trim()).filter(Boolean);
+    const adminEmails = activeAdmins.map((u) => `${u.name} <${u.email}>`);
+    const lines = [];
+    lines.push('<strong>Wie krijgt urenverbruik- en inactiviteits-mails?</strong>');
+    lines.push('• <em>Projectmanager van het betreffende project</em> (varieert per mail)');
+    if (adminEmails.length === 0) {
+      lines.push('• Geen actieve admins gevonden');
+    } else {
+      lines.push(`• Actieve admins: ${adminEmails.map(escapeHtml).join(', ')}`);
+    }
+    if (extra.length) {
+      lines.push(`• Extra ontvangers (hieronder ingesteld): ${extra.map(escapeHtml).join(', ')}`);
+    }
+    document.getElementById('recipientsPreview').innerHTML = lines.join('<br>');
+  }
+  updateRecipientsPreview();
+  document.querySelector('[name=notify_emails_extra]').addEventListener('input', updateRecipientsPreview);
+
   // ── Settings opslaan ────────────────────────────────────────────
+  async function saveMainSettings() {
+    const f = new FormData(document.getElementById('settingsForm'));
+    await apiSend('/api/admin/settings', 'POST', {
+      threshold_warning: f.get('threshold_warning'),
+      threshold_critical: f.get('threshold_critical'),
+      threshold_exceeded: f.get('threshold_exceeded'),
+      inactivity_days: f.get('inactivity_days'),
+      notify_emails_extra: f.get('notify_emails_extra'),
+      report_period: f.get('report_period'),
+      report_recipients: f.get('report_recipients'),
+      pdf_prompt: f.get('pdf_prompt'),
+    });
+  }
+
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const f = new FormData(e.target);
-    try {
-      await apiSend('/api/admin/settings', 'POST', {
-        threshold_warning: f.get('threshold_warning'),
-        threshold_critical: f.get('threshold_critical'),
-        threshold_exceeded: f.get('threshold_exceeded'),
-        inactivity_days: f.get('inactivity_days'),
-        notify_emails_extra: f.get('notify_emails_extra'),
-        report_period: f.get('report_period'),
-        report_recipients: f.get('report_recipients'),
-        pdf_prompt: f.get('pdf_prompt'),
-      });
-      toast('Instellingen opgeslagen', 'success');
-    } catch (err) { toast(err.message, 'error'); }
+    try { await saveMainSettings(); toast('Instellingen opgeslagen', 'success'); }
+    catch (err) { toast(err.message, 'error'); }
   });
 
-  // ── Test rapportage ─────────────────────────────────────────────
+  // ── Test rapportage — eerst saven, dan verzenden ────────────────
   document.getElementById('testReportBtn').onclick = async () => {
     try {
+      await saveMainSettings();
       const r = await apiSend('/api/admin/settings?action=test_report', 'POST', {});
       if (r.sent) toast(`Test-rapportage verstuurd naar ${r.recipients.length} ontvanger(s) (${r.count} projecten).`, 'success');
+      else if (r.reason === 'no_recipients') toast('Geen ontvangers ingevuld — vul ze in en probeer opnieuw.', 'error');
+      else if (r.reason === 'no_projects') toast('Geen "In progress" projecten gevonden om te rapporteren.', 'info');
       else toast(`Niet verstuurd: ${r.reason}`, 'info');
     } catch (err) { toast(err.message, 'error'); }
   };
@@ -159,15 +192,12 @@
     for (const input of document.querySelectorAll('input[data-cap-id]')) {
       const id = input.dataset.capId;
       const val = input.value.trim();
-      if (val === '') continue; // leeg = niet ingesteld
+      if (val === '') continue;
       const num = Number(val);
       if (Number.isFinite(num) && num >= 0) newCaps[id] = num;
     }
     try {
-      await apiSend('/api/admin/settings', 'POST', {
-        ...settings,
-        employee_capacities: newCaps,
-      });
+      await apiSend('/api/admin/settings', 'POST', { employee_capacities: newCaps });
       toast('Capaciteiten opgeslagen', 'success');
     } catch (err) { toast(err.message, 'error'); }
   });

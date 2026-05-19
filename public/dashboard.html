@@ -28,16 +28,25 @@
     grid.innerHTML = projects.map((p) => {
       const pct = p.percentage_used;
       const barWidth = Math.min(pct, 100);
+      const teamNames = (p.team || []).map((t) => escapeHtml(t.name));
+      const teamHtml = teamNames.length === 0
+        ? '<span class="subtle">geen team toegewezen</span>'
+        : teamNames.map((n) => `<span class="badge badge-gray" style="margin-right:.25rem">${n}</span>`).join('');
       return `
         <a class="card" href="/project.html?id=${encodeURIComponent(p.id)}">
           <div class="card-header">
             <div class="card-header-row">
               <h3 style="margin:0">${escapeHtml(p.name)}</h3>
               <span class="badge status-${p.status || 'in_progress'}">${statusLabel(p.status || 'in_progress')}</span>
+              ${p.module ? `<span class="badge badge-blue">${escapeHtml(p.module)}</span>` : ''}
             </div>
             <span class="badge ${percentageBadgeClass(pct)}">${pct}%</span>
           </div>
           <p class="subtle">${escapeHtml(p.description || '—')}</p>
+          <div style="margin:.5rem 0">
+            <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.25rem">Team</div>
+            <div>${teamHtml}</div>
+          </div>
           <div class="progress">
             <div class="progress-bar ${progressBarClass(pct)}" style="width:${barWidth}%"></div>
           </div>

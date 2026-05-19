@@ -1,7 +1,8 @@
-// GET   /api/admin/settings            - alle instellingen
-// POST  /api/admin/settings            - update instellingen
-// POST  /api/admin/settings?action=test_report - stuur direct een test-rapportage
-import { requireAdmin } from '../../lib/auth.js';
+// GET   /api/admin/settings  - alle instellingen (alle ingelogde users mogen lezen,
+//                              zodat de Planning-pagina capaciteiten + vakanties kan tonen)
+// POST  /api/admin/settings  - update (alleen aanwezige velden in body); admin-only
+// POST  /api/admin/settings?action=test_report - stuur direct een test-rapportage; admin-only
+import { requireUser, requireAdmin } from '../../lib/auth.js';
 import { getSettings, saveSettings } from '../../lib/db.js';
 import { sendProjectReport } from '../../lib/notify.js';
 
@@ -19,18 +20,46 @@ function normalizeCapacities(input) {
   return out;
 }
 
-export default async function handler(req, res) {
-  const admin = await requireAdmin(req, res);
-  if (!admin) return;
+function isIsoDate(s) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+}
 
+function normalizeVacations(input) {
+  if (!input || typeof input !== 'object') return {};
+  const out = {};
+  for (const [k, list] of Object.entries(input)) {
+    const id = String(k).trim();
+    if (!id) continue;
+    if (!Array.isArray(list)) continue;
+    const periods = [];
+    for (const p of list) {
+      if (!p) continue;
+      const start = String(p.start || '').trim();
+      const end = String(p.end || '').trim();
+      const label = String(p.label || '').trim();
+      if (!isIsoDate(start) || !isIsoDate(end)) continue;
+      if (start > end) continue;
+      periods.push({ start, end, label });
+    }
+    periods.sort((a, b) => a.start.localeCompare(b.start));
+    if (periods.length) out[id] = periods;
+  }
+  return out;
+}
+
+export default async function handler(req, res) {
   if (req.method === 'GET') {
+    const user = await requireUser(req, res);
+    if (!user) return;
     const s = await getSettings();
     res.status(200).json({ settings: s });
     return;
   }
 
   if (req.method === 'POST') {
-    // Speciale actie: stuur testrapportage
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+
     if (req.query.action === 'test_report') {
       try {
         const result = await sendProjectReport({ force: true });
@@ -42,21 +71,22 @@ export default async function handler(req, res) {
     }
 
     const b = req.body || {};
-    const patch = {
-      threshold_warning: Number(b.threshold_warning) || 80,
-      threshold_critical: Number(b.threshold_critical) || 95,
-      threshold_exceeded: Number(b.threshold_exceeded) || 100,
-      inactivity_days: Number(b.inactivity_days) || 30,
-      notify_emails_extra: String(b.notify_emails_extra || '').trim(),
-      pdf_prompt: String(b.pdf_prompt || '').trim(),
-      report_period: REPORT_PERIODS.includes(String(b.report_period || '').trim())
-        ? String(b.report_period).trim()
-        : 'off',
-      report_recipients: String(b.report_recipients || '').trim(),
-    };
-    if (b.employee_capacities !== undefined) {
-      patch.employee_capacities = normalizeCapacities(b.employee_capacities);
+    const patch = {};
+    // Alleen velden die expliciet in body zitten worden bijgewerkt — voorkomt dat
+    // een gedeeltelijke save (bv. capaciteiten-form) andere settings overschrijft.
+    if (b.threshold_warning !== undefined) patch.threshold_warning = Number(b.threshold_warning) || 80;
+    if (b.threshold_critical !== undefined) patch.threshold_critical = Number(b.threshold_critical) || 95;
+    if (b.threshold_exceeded !== undefined) patch.threshold_exceeded = Number(b.threshold_exceeded) || 100;
+    if (b.inactivity_days !== undefined) patch.inactivity_days = Number(b.inactivity_days) || 30;
+    if (b.notify_emails_extra !== undefined) patch.notify_emails_extra = String(b.notify_emails_extra || '').trim();
+    if (b.pdf_prompt !== undefined) patch.pdf_prompt = String(b.pdf_prompt || '').trim();
+    if (b.report_period !== undefined) {
+      const v = String(b.report_period || '').trim();
+      patch.report_period = REPORT_PERIODS.includes(v) ? v : 'off';
     }
+    if (b.report_recipients !== undefined) patch.report_recipients = String(b.report_recipients || '').trim();
+    if (b.employee_capacities !== undefined) patch.employee_capacities = normalizeCapacities(b.employee_capacities);
+    if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;
