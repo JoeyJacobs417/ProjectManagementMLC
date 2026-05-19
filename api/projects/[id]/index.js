@@ -1,10 +1,10 @@
 // GET    /api/projects/:id
-// GET    /api/projects/:id?action=download_pdf - PDF download
-// PATCH  /api/projects/:id                     - update (auto-logt wijzigingen)
+// GET    /api/projects/:id?action=download_pdf
+// PATCH  /api/projects/:id                       - update (auto-logt wijzigingen)
 // PATCH  /api/projects/:id  body { add_note }
 // PATCH  /api/projects/:id  body { delete_note }
 // PATCH  /api/projects/:id  body { delete_pdf }
-// DELETE /api/projects/:id                     - project + alle gerelateerde data verwijderen (admin)
+// DELETE /api/projects/:id                       - admin only
 import crypto from 'node:crypto';
 import { requireUser } from '../../../lib/auth.js';
 import {
@@ -55,6 +55,27 @@ function normalizeContacts(input) {
   return out;
 }
 
+function normalizeModules(input) {
+  let raw = [];
+  if (Array.isArray(input)) raw = input;
+  else if (typeof input === 'string' && input.trim()) raw = [input];
+  const seen = new Set();
+  const out = [];
+  for (const m of raw) {
+    const v = String(m || '').trim();
+    if (!VALID_MODULES.includes(v) || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function modulesOf(p) {
+  if (Array.isArray(p.modules) && p.modules.length > 0) return p.modules;
+  if (p.module) return [p.module];
+  return [];
+}
+
 async function buildDetail(project) {
   const entries = await listTimeEntries(project.id);
   const hoursUsed = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
@@ -68,10 +89,12 @@ async function buildDetail(project) {
       .reduce((a, e) => a + (Number(e.hours) || 0), 0);
     return { ...m, hours: Math.round(memberHours * 100) / 100 };
   });
+  const mods = modulesOf(project);
   return {
     ...project,
     status: project.status || 'in_progress',
-    module: project.module || '',
+    modules: mods,
+    module: mods[0] || '',
     deadline: project.deadline || '',
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
@@ -80,6 +103,7 @@ async function buildDetail(project) {
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
     activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
+    last_synced_at: project.last_synced_at || null,
     team,
     team_stats,
     hours_used: hoursUsed,
@@ -186,9 +210,14 @@ export default async function handler(req, res) {
       const s = String(b.status).toLowerCase();
       project.status = VALID_STATUSES.includes(s) ? s : project.status || 'in_progress';
     }
-    if (b.module !== undefined) {
-      const m = String(b.module || '').trim();
-      project.module = VALID_MODULES.includes(m) ? m : '';
+    if (b.modules !== undefined || b.module !== undefined) {
+      const mods = normalizeModules(b.modules !== undefined ? b.modules : b.module);
+      if (mods.length === 0) {
+        res.status(400).json({ error: 'Selecteer minstens 1 module' });
+        return;
+      }
+      project.modules = mods;
+      delete project.module; // legacy weghalen
     }
     if (b.deadline !== undefined) project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
     if (b.start_date !== undefined) project.start_date = isIsoDate(b.start_date) ? String(b.start_date) : '';

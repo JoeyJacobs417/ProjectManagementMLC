@@ -10,13 +10,11 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, statusLabel, deadlineBadge, fmtDate, activityDescription } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, MODULE_OPTIONS, statusLabel, deadlineBadge, fmtDate, fmtDateTime, activityDescription } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   const id = new URLSearchParams(location.search).get('id');
   if (!id) { document.getElementById('content').innerHTML = '<p>Geen project-ID.</p>'; throw new Error('no id'); }
-
-  const MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
   let project, managers = [], clients = [], chartsRendered = false;
 
@@ -52,8 +50,6 @@
     const c = document.getElementById('content');
     const statusOptions = STATUS_OPTIONS.map((o) =>
       `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`).join('');
-    const moduleOptions = `<option value="">— Kies module —</option>` + MODULES.map((m) =>
-      `<option value="${m}" ${m === project.module ? 'selected' : ''}>${m}</option>`).join('');
     const managerOptions = `<option value="">— Geen —</option>` + managers.map((m) =>
       `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`).join('');
     const clientOptions = `<option value="">— Geen —</option>` + clients.map((c) =>
@@ -69,6 +65,18 @@
       </tr>`).join('');
 
     const clientName = (clients.find((c) => c.id === project.client_id) || {}).name;
+    const projectModules = project.modules || [];
+
+    const notesHtml = (project.notes && project.notes.length > 0)
+      ? [...project.notes].reverse().map((n) => `
+          <div style="border-top:1px solid var(--border); padding:.6rem 0">
+            <div class="subtle" style="font-size:.8rem">
+              <strong>${escapeHtml(n.author_name)}</strong> · ${new Date(n.created_at).toLocaleString('nl-NL')}
+              ${(me.role === 'admin' || n.author_id === me.id) ? `<a href="#" data-delete-note="${n.id}" style="margin-left:.5rem">verwijder</a>` : ''}
+            </div>
+            <div style="white-space:pre-wrap; margin-top:.2rem; font-size:.92rem">${escapeHtml(n.text)}</div>
+          </div>`).join('')
+      : '<p class="subtle" style="margin:0">Nog geen notities.</p>';
 
     c.innerHTML = `
       <div class="page-header">
@@ -77,13 +85,14 @@
             <h1 id="projectTitle" style="margin:0">${escapeHtml(project.name)}</h1>
             <button class="btn btn-ghost" id="renameBtn" style="font-size:.8rem; padding:.3rem .6rem">✏ Hernoem</button>
             <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
-            ${project.module ? `<span class="badge badge-blue">${escapeHtml(project.module)}</span>` : ''}
+            ${projectModules.map((m) => `<span class="badge badge-blue">${escapeHtml(m)}</span>`).join('')}
             ${project.is_poc ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>` : ''}
             ${project.deadline ? deadlineBadge(project.deadline) : ''}
           </div>
           <p class="subtle">
             PM: ${escapeHtml(project.manager_name || '—')}${clientName ? ` · Klant: ${escapeHtml(clientName)}` : ''}
             ${project.start_date ? ` · Start: ${fmtDate(project.start_date)}` : ''}
+            ${project.last_synced_at ? ` · Laatst gesynced: ${fmtDateTime(project.last_synced_at)}` : ''}
           </p>
         </div>
         <div style="display:flex; gap:.5rem">
@@ -92,22 +101,20 @@
         </div>
       </div>
 
+      <!-- NIEUWE LAYOUT: Notities + Uren&Planning bovenaan -->
       <div class="grid grid-2">
         <div class="card-static">
-          <h3>Beschrijving</h3>
-          <p>${escapeHtml(project.description || '—')}</p>
-          ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
-          ${project.feature_requests ? `<h3>Feature requests</h3><p style="white-space:pre-wrap">${escapeHtml(project.feature_requests)}</p>` : ''}
-          ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
-          ${(project.contacts && project.contacts.length) ? `
-            <h3>Contactpersonen</h3>
-            <ul style="margin:.25rem 0 0; padding-left:1.2rem">
-              ${project.contacts.map((c) => `
-                <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
-            </ul>` : ''}
+          <h3 style="margin-top:0">Notities</h3>
+          <form id="noteForm" class="form" style="margin-bottom:.75rem">
+            <label><textarea name="text" rows="2" placeholder="Voeg een notitie toe (klant belde, afspraak verzet, …)"></textarea></label>
+            <div><button class="btn btn-primary" type="submit">+ Notitie toevoegen</button></div>
+          </form>
+          <div id="notesList" style="max-height:300px; overflow-y:auto">
+            ${notesHtml}
+          </div>
         </div>
         <div class="card-static">
-          <h3>Uren & Planning</h3>
+          <h3 style="margin-top:0">Uren & Planning</h3>
           <p><strong>Verbruikt:</strong> ${project.hours_used.toFixed(1)} uur</p>
           <p><strong>Beschikbaar:</strong> ${(project.available_hours || 0).toFixed(1)} uur</p>
           <p><strong>Uurtarief:</strong> € ${(project.hourly_rate || 0).toFixed(2)}</p>
@@ -120,24 +127,19 @@
         </div>
       </div>
 
-      <h2>Notities</h2>
-      <div class="card-static">
-        <form id="noteForm" class="form" style="margin-bottom:1rem">
-          <label><textarea name="text" rows="3" placeholder="Voeg een notitie toe (klant belde, afspraak verzet, …)"></textarea></label>
-          <div><button class="btn btn-primary" type="submit">+ Notitie toevoegen</button></div>
-        </form>
-        <div id="notesList">
-          ${(project.notes && project.notes.length > 0)
-            ? [...project.notes].reverse().map((n) => `
-                <div style="border-top:1px solid var(--border); padding:.75rem 0">
-                  <div class="subtle" style="font-size:.85rem">
-                    <strong>${escapeHtml(n.author_name)}</strong> · ${new Date(n.created_at).toLocaleString('nl-NL')}
-                    ${(me.role === 'admin' || n.author_id === me.id) ? `<a href="#" data-delete-note="${n.id}" style="margin-left:.5rem">verwijder</a>` : ''}
-                  </div>
-                  <div style="white-space:pre-wrap; margin-top:.25rem">${escapeHtml(n.text)}</div>
-                </div>`).join('')
-            : '<p class="subtle">Nog geen notities.</p>'}
-        </div>
+      <!-- Beschrijving + Uitzonderingen + Contacten ONDER het bovenste blok -->
+      <div class="card-static" style="margin-top:1rem">
+        <h3>Beschrijving</h3>
+        <p>${escapeHtml(project.description || '—')}</p>
+        ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
+        ${project.feature_requests ? `<h3>Feature requests</h3><p style="white-space:pre-wrap">${escapeHtml(project.feature_requests)}</p>` : ''}
+        ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
+        ${(project.contacts && project.contacts.length) ? `
+          <h3>Contactpersonen</h3>
+          <ul style="margin:.25rem 0 0; padding-left:1.2rem">
+            ${project.contacts.map((c) => `
+              <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
+          </ul>` : ''}
       </div>
 
       <h2>Offerte / voorstel-PDF</h2>
@@ -165,12 +167,21 @@
             <label><span class="lbl">Status</span><select name="status">${statusOptions}</select></label>
           </div>
 
+          <h4>Modules <span class="required">*</span> <span class="subtle" style="font-weight:400">(minstens 1 verplicht — meerdere mogelijk)</span></h4>
+          <div class="checkbox-grid" id="modulesGrid">
+            ${MODULE_OPTIONS.map((m) => `
+              <label>
+                <input type="checkbox" name="modules" value="${m}" ${projectModules.includes(m) ? 'checked' : ''}>
+                ${m}
+              </label>`).join('')}
+          </div>
+
           <div class="form-row">
-            <label><span class="lbl">Module</span><select name="module">${moduleOptions}</select></label>
             <label><span class="lbl">Klant</span><select name="client_id">${clientOptions}</select></label>
             <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
               <input type="checkbox" name="is_poc" style="width:auto" ${project.is_poc ? 'checked' : ''}> Dit is een POC
             </label>
+            <label></label>
           </div>
 
           <div class="form-row">
@@ -184,11 +195,10 @@
 
           <label>
             <span class="lbl">Feature requests</span>
-            <textarea name="feature_requests" rows="5" placeholder="Wat moet er gebouwd worden om dit project te laten slagen?">${escapeHtml(project.feature_requests || '')}</textarea>
+            <textarea name="feature_requests" rows="5">${escapeHtml(project.feature_requests || '')}</textarea>
           </label>
 
           <h4>Contactpersonen bij de klant</h4>
-          <p class="subtle" style="margin-top:-.4rem; font-size:.85rem">Vink "Ontvangt urenverbruik-mails" aan om deze contact óók de drempel-mails te laten ontvangen.</p>
           <table class="table">
             <thead><tr>
               <th>Naam</th><th>E-mailadres</th>
@@ -266,9 +276,7 @@
       } catch (err) { toast(err.message, 'error'); }
     };
 
-    if (canDelete) {
-      document.getElementById('deleteProjectBtn').onclick = deleteProjectFlow;
-    }
+    if (canDelete) document.getElementById('deleteProjectBtn').onclick = deleteProjectFlow;
 
     document.getElementById('syncBtn').onclick = async () => {
       try {
@@ -364,6 +372,9 @@
         if (!name && !email) continue;
         contacts.push({ name, email, receives_threshold_mails: receives });
       }
+      const modules = Array.from(document.querySelectorAll('#modulesGrid input[type=checkbox]:checked'))
+        .map((cb) => cb.value);
+      if (modules.length === 0) { toast('Selecteer minstens 1 module', 'error'); return; }
       const body = {
         description: f.get('description'),
         available_hours: Number(f.get('available_hours')) || 0,
@@ -371,7 +382,7 @@
         exceptions: f.get('exceptions'),
         feature_requests: f.get('feature_requests'),
         status: f.get('status'),
-        module: f.get('module'),
+        modules,
         client_id: f.get('client_id') || '',
         deadline: f.get('deadline') || '',
         start_date: f.get('start_date') || '',

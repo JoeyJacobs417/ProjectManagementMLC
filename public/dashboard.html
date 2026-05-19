@@ -43,7 +43,7 @@
   <div id="employees"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge, daysFromNow, fmtDate } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge, daysFromNow, fmtDate, fmtEuro } from '/app.js';
   await renderTopbar('/dashboard.html');
   const [{ projects }, { settings }] = await Promise.all([
     apiGet('/api/projects'),
@@ -53,7 +53,7 @@
   const capacities = settings.employee_capacities || {};
   const vacations = settings.employee_vacations || {};
 
-  // ── Komende deadlines ─────────────────────────────────────────
+  // Komende deadlines
   const deadlinesEl = document.getElementById('deadlines');
   const withDeadline = projects
     .filter((p) => p.deadline && p.status !== 'done')
@@ -83,7 +83,7 @@
     });
   }
 
-  // ── Helpers voor maand-selectie ───────────────────────────────
+  // Helpers
   function isoOf(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   }
@@ -91,16 +91,13 @@
     return (periods || []).some((p) => p.start <= iso && iso <= p.end);
   }
   function workdaysInMonth(year, monthIdx0, vacationPeriods) {
-    // monthIdx0: 0..11
     const first = new Date(year, monthIdx0, 1);
     const last = new Date(year, monthIdx0 + 1, 0);
     const today = new Date(); today.setHours(0,0,0,0);
-    let d = new Date(first);
-    let workdays = 0;
+    let d = new Date(first); let workdays = 0;
     while (d <= last) {
       const dow = d.getDay();
       if (dow !== 0 && dow !== 6) {
-        // Alleen dagen vanaf vandaag tellen (voor lopende maand)
         if (d >= today) {
           if (!isOnVacation(isoOf(d), vacationPeriods)) workdays++;
         }
@@ -110,30 +107,25 @@
     return workdays;
   }
 
-  // ── Omzetvoorspelling ─────────────────────────────────────────
+  // Omzetvoorspelling
   const periodSel = document.getElementById('forecastPeriod');
   const monthInput = document.getElementById('forecastMonth');
   const monthWrap = document.getElementById('monthPickerWrap');
   const STORAGE_PERIOD = 'pm_forecast_period';
   const STORAGE_MONTH = 'pm_forecast_month';
-  // Default maand = volgende maand
   const next = new Date(); next.setDate(1); next.setMonth(next.getMonth() + 1);
   monthInput.value = sessionStorage.getItem(STORAGE_MONTH) || `${next.getFullYear()}-${String(next.getMonth()+1).padStart(2,'0')}`;
   periodSel.value = sessionStorage.getItem(STORAGE_PERIOD) || 'weeks-8';
 
   function getPeriodHoursForEmployee(empId) {
-    // Returns: { hours: maxHoursInPeriod, label: 'tekst voor in tabel' }
     const cap = Number(capacities[empId]) || 0;
     if (cap <= 0) return { hours: Infinity, label: '∞' };
-
     const choice = periodSel.value;
     const empVacations = vacations[empId] || [];
     if (choice.startsWith('weeks-')) {
       const weeks = Number(choice.split('-')[1]);
-      // Capacity over N weken minus vakantiedagen in dat venster
       const today = new Date(); today.setHours(0,0,0,0);
       const end = new Date(today); end.setDate(end.getDate() + weeks * 7);
-      // Tel werkdagen tussen today en end
       let workdays = 0;
       const d = new Date(today);
       while (d < end) {
@@ -141,16 +133,14 @@
         if (dow !== 0 && dow !== 6 && !isOnVacation(isoOf(d), empVacations)) workdays++;
         d.setDate(d.getDate() + 1);
       }
-      const maxHours = (cap / 5) * workdays;
-      return { hours: maxHours, label: `${weeks}w (${workdays} werkdagen)` };
+      return { hours: (cap / 5) * workdays, label: `${weeks}w (${workdays} werkdagen)` };
     }
     if (choice === 'month') {
       const mv = monthInput.value || '';
       const [y, m] = mv.split('-').map(Number);
       if (!y || !m) return { hours: 0, label: 'geen maand' };
       const workdays = workdaysInMonth(y, m - 1, empVacations);
-      const maxHours = (cap / 5) * workdays;
-      return { hours: maxHours, label: `${workdays} werkdagen in deze maand` };
+      return { hours: (cap / 5) * workdays, label: `${workdays} werkdagen` };
     }
     return { hours: Infinity, label: '∞' };
   }
@@ -179,10 +169,8 @@
 
         if (!perPerson.has(member.moneybird_user_id)) {
           perPerson.set(member.moneybird_user_id, {
-            id: member.moneybird_user_id,
-            name: member.name,
-            projectBreakdown: [],
-            rawHours: 0,
+            id: member.moneybird_user_id, name: member.name,
+            projectBreakdown: [], rawHours: 0,
           });
         }
         const rec = perPerson.get(member.moneybird_user_id);
@@ -196,8 +184,7 @@
       const cap = Number(capacities[rec.id]) || 0;
       const { hours: maxHoursInPeriod, label: periodLabel } = getPeriodHoursForEmployee(rec.id);
       const factor = rec.rawHours > maxHoursInPeriod ? maxHoursInPeriod / rec.rawHours : 1;
-      let cappedHours = 0;
-      let cappedRevenue = 0;
+      let cappedHours = 0; let cappedRevenue = 0;
       for (const b of rec.projectBreakdown) {
         const h = b.hours * factor;
         cappedHours += h;
@@ -205,13 +192,8 @@
       }
       grandTotal += cappedRevenue;
       rows.push({
-        name: rec.name,
-        cap: cap > 0 ? cap : null,
-        rawHours: rec.rawHours,
-        cappedHours,
-        cappedRevenue,
-        capped: factor < 1,
-        periodLabel,
+        name: rec.name, cap: cap > 0 ? cap : null,
+        cappedHours, cappedRevenue, capped: factor < 1, periodLabel,
       });
     }
     rows.sort((a, b) => b.cappedRevenue - a.cappedRevenue);
@@ -221,7 +203,7 @@
       : `komende ${periodSel.value.split('-')[1]} weken`;
 
     document.getElementById('forecastTotal').innerHTML =
-      ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">€ ${grandTotal.toFixed(2)}</strong>`;
+      ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong>`;
 
     const el = document.getElementById('forecast');
     if (rows.length === 0) {
@@ -244,12 +226,12 @@
               <td>${r.cap !== null ? r.cap + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
               <td><span class="subtle">${escapeHtml(r.periodLabel)}</span></td>
               <td>${r.cappedHours.toFixed(1)} u${r.capped ? ' <span class="subtle">(capped)</span>' : ''}</td>
-              <td><strong>€ ${r.cappedRevenue.toFixed(2)}</strong></td>
+              <td><strong>${fmtEuro(r.cappedRevenue)}</strong></td>
             </tr>`).join('')}
         </tbody>
       </table>
       <p class="subtle" style="margin-top:.5rem">
-        Schatting is gebaseerd op resterende uren van projecten met status "In progress" of "Future", verdeeld over teamleden naar evenredigheid van gewerkte uren (of gelijk verdeeld als er nog niet gewerkt is). De maximale uren in de periode = (capaciteit ÷ 5) × werkdagen in de periode, min vakantiedagen.
+        Schatting op basis van resterende uren × uurtarief van projecten "In progress"/"Future", verdeeld over teamleden naar evenredigheid van gewerkte uren (of gelijk verdeeld als nog niet gewerkt), gecapt op (capaciteit ÷ 5) × werkdagen in de periode.
       </p>
     `;
   }
@@ -257,13 +239,15 @@
   monthInput.addEventListener('change', renderForecast);
   renderForecast();
 
-  // ── Modulerapport ─────────────────────────────────────────────
+  // Modulerapport — projecten kunnen nu meerdere modules hebben
   const moduleEl = document.getElementById('moduleReport');
   const byModule = new Map();
   for (const p of projects) {
-    const mod = p.module || '(geen module)';
-    if (!byModule.has(mod)) byModule.set(mod, []);
-    byModule.get(mod).push(p);
+    const mods = (p.modules && p.modules.length) ? p.modules : ['(geen module)'];
+    for (const mod of mods) {
+      if (!byModule.has(mod)) byModule.set(mod, []);
+      byModule.get(mod).push(p);
+    }
   }
   const moduleRows = Array.from(byModule.entries()).map(([mod, projs]) => {
     const totalAvail = projs.reduce((a, p) => a + (Number(p.available_hours) || 0), 0);
@@ -318,7 +302,7 @@
     });
   }
 
-  // ── Medewerkers ───────────────────────────────────────────────
+  // Medewerkers
   const empMap = new Map();
   for (const p of projects) {
     for (const t of (p.team || [])) {

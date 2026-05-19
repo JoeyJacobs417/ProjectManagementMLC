@@ -7,10 +7,39 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <div class="page-header">
-    <h1>Klanten</h1>
-    <span class="subtle" id="countLabel"></span>
+    <div>
+      <h1>Klanten</h1>
+      <span class="subtle" id="countLabel"></span>
+    </div>
+    <button class="btn btn-primary hidden" id="addClientBtn">+ Nieuwe klant</button>
   </div>
-  <p class="subtle">Overzicht van klanten met hun projecten en totale urenstatus. Admin-gebruikers kunnen klanten toevoegen, hernoemen en verwijderen.</p>
+  <p class="subtle">Overzicht van klanten met hun projecten en totale urenstatus. Klik op een klant om de gegevens te bewerken.</p>
+
+  <div class="card-static hidden" id="newClientPanel" style="margin-bottom:1rem">
+    <h3 style="margin-top:0">Nieuwe klant</h3>
+    <form id="newClientForm" class="form">
+      <label>
+        <span class="lbl">Bedrijfsnaam</span>
+        <input type="text" name="name" required placeholder="bv. Klant B.V.">
+      </label>
+      <h4>Contactpersonen</h4>
+      <table class="table">
+        <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+        <tbody id="newContactsBody">
+          <tr>
+            <td><input type="text" data-c="name"></td>
+            <td><input type="email" data-c="email"></td>
+            <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
+          </tr>
+        </tbody>
+      </table>
+      <button class="btn btn-ghost" type="button" id="newAddContact">+ Contactpersoon toevoegen</button>
+      <div style="margin-top:1rem; display:flex; gap:.5rem">
+        <button class="btn btn-primary" type="submit">Klant toevoegen</button>
+        <button class="btn btn-ghost" type="button" id="cancelNewClient">Annuleren</button>
+      </div>
+    </form>
+  </div>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
@@ -18,123 +47,93 @@
     </label>
   </div>
 
-  <div id="adminPanel" class="hidden">
-    <div class="card-static" style="margin-bottom:1rem">
-      <h3>Klanten beheren</h3>
-      <p class="subtle" style="margin-top:-.25rem">Wijzig naam en contactpersonen direct hieronder. Klik op "Klanten opslaan" om je wijzigingen door te voeren.</p>
-      <div id="clientsEdit"></div>
-      <div style="display:flex; gap:.5rem; margin-top:1rem">
-        <button class="btn btn-ghost" type="button" id="addClient">+ Klant toevoegen</button>
-        <button class="btn btn-primary" type="button" id="saveClients">Klanten opslaan</button>
-      </div>
-    </div>
-  </div>
-
-  <h2>Overzicht</h2>
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
   const me = await renderTopbar('/clients.html');
+  const isAdmin = me?.role === 'admin';
+  if (isAdmin) document.getElementById('addClientBtn').classList.remove('hidden');
 
   const [{ projects }, settingsResp] = await Promise.all([
     apiGet('/api/projects'),
     apiGet('/api/admin/settings'),
   ]);
-  const isAdmin = me?.role === 'admin';
   let clients = settingsResp.settings.clients || [];
 
-  // ── Beheer (admin only) ─────────────────────────────────────────
-  if (isAdmin) {
-    document.getElementById('adminPanel').classList.remove('hidden');
-    let workingClients = JSON.parse(JSON.stringify(clients));
+  // ── Nieuwe klant panel ─────────────────────────────────────────
+  const panel = document.getElementById('newClientPanel');
+  const addBtn = document.getElementById('addClientBtn');
 
-    function renderEdit() {
-      const el = document.getElementById('clientsEdit');
-      if (workingClients.length === 0) {
-        el.innerHTML = '<p class="subtle">Nog geen klanten. Klik op "+ Klant toevoegen".</p>';
-        return;
-      }
-      el.innerHTML = workingClients.map((c, i) => {
-        const contactsRows = (c.contacts && c.contacts.length ? c.contacts : [{ name: '', email: '' }]).map((cc, j) => `
-          <tr>
-            <td><input type="text" data-cli="${i}" data-c-idx="${j}" data-c-field="name" value="${escapeHtml(cc.name || '')}" placeholder="Naam"></td>
-            <td><input type="email" data-cli="${i}" data-c-idx="${j}" data-c-field="email" value="${escapeHtml(cc.email || '')}" placeholder="email@bedrijf.nl"></td>
-            <td><button class="btn btn-ghost" type="button" data-remove-contact="${i}|${j}">Verwijder</button></td>
-          </tr>`).join('');
-        return `
-          <div style="border-top:1px solid var(--border); padding:1rem 0">
-            <div class="form-row" style="grid-template-columns:1fr auto">
-              <label>
-                <span class="lbl">Bedrijfsnaam</span>
-                <input type="text" data-cli="${i}" data-field="name" value="${escapeHtml(c.name || '')}">
-              </label>
-              <label style="align-self:end">
-                <button class="btn btn-ghost" type="button" data-remove-client="${i}">Klant verwijderen</button>
-              </label>
-            </div>
-            <table class="table" style="margin:.5rem 0 0">
-              <thead><tr><th>Contactpersoon</th><th>E-mail</th><th></th></tr></thead>
-              <tbody>${contactsRows}</tbody>
-            </table>
-            <button class="btn btn-ghost" type="button" data-add-contact="${i}" style="margin-top:.25rem">+ Contact toevoegen</button>
-          </div>`;
-      }).join('');
-
-      el.querySelectorAll('input[data-cli][data-field]').forEach((inp) => {
-        inp.oninput = () => {
-          workingClients[Number(inp.dataset.cli)][inp.dataset.field] = inp.value;
-        };
-      });
-      el.querySelectorAll('input[data-cli][data-c-idx]').forEach((inp) => {
-        inp.oninput = () => {
-          const i = Number(inp.dataset.cli);
-          const j = Number(inp.dataset.cIdx);
-          if (!workingClients[i].contacts) workingClients[i].contacts = [];
-          if (!workingClients[i].contacts[j]) workingClients[i].contacts[j] = { name: '', email: '' };
-          workingClients[i].contacts[j][inp.dataset.cField] = inp.value;
-        };
-      });
-      el.querySelectorAll('button[data-add-contact]').forEach((btn) => {
-        btn.onclick = () => {
-          const i = Number(btn.dataset.addContact);
-          if (!workingClients[i].contacts) workingClients[i].contacts = [];
-          workingClients[i].contacts.push({ name: '', email: '' });
-          renderEdit();
-        };
-      });
-      el.querySelectorAll('button[data-remove-contact]').forEach((btn) => {
-        btn.onclick = () => {
-          const [i, j] = btn.dataset.removeContact.split('|').map(Number);
-          workingClients[i].contacts.splice(j, 1);
-          renderEdit();
-        };
-      });
-      el.querySelectorAll('button[data-remove-client]').forEach((btn) => {
-        btn.onclick = () => {
-          const i = Number(btn.dataset.removeClient);
-          if (!confirm(`"${workingClients[i].name || 'deze klant'}" verwijderen?`)) return;
-          workingClients.splice(i, 1);
-          renderEdit();
-        };
-      });
-    }
-    renderEdit();
-
-    document.getElementById('addClient').onclick = () => {
-      workingClients.push({ name: '', contacts: [{ name: '', email: '' }] });
-      renderEdit();
+  function bindNewContactRow(tr) {
+    const rm = tr.querySelector('[data-remove]');
+    if (rm) rm.onclick = () => {
+      const tbody = document.getElementById('newContactsBody');
+      if (tbody.children.length > 1) tr.remove();
+      else tr.querySelectorAll('input').forEach((i) => (i.value = ''));
     };
-    document.getElementById('saveClients').onclick = async () => {
+  }
+  document.querySelectorAll('#newContactsBody tr').forEach(bindNewContactRow);
+
+  if (isAdmin) {
+    addBtn.onclick = () => {
+      panel.classList.remove('hidden');
+      addBtn.classList.add('hidden');
+      panel.scrollIntoView({ behavior: 'smooth' });
+      document.querySelector('#newClientForm [name=name]').focus();
+    };
+    document.getElementById('cancelNewClient').onclick = () => {
+      panel.classList.add('hidden');
+      addBtn.classList.remove('hidden');
+      document.getElementById('newClientForm').reset();
+      document.getElementById('newContactsBody').innerHTML = `
+        <tr>
+          <td><input type="text" data-c="name"></td>
+          <td><input type="email" data-c="email"></td>
+          <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
+        </tr>`;
+      document.querySelectorAll('#newContactsBody tr').forEach(bindNewContactRow);
+    };
+    document.getElementById('newAddContact').onclick = () => {
+      const tbody = document.getElementById('newContactsBody');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" data-c="name"></td>
+        <td><input type="email" data-c="email"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
+      tbody.appendChild(tr);
+      bindNewContactRow(tr);
+    };
+    document.getElementById('newClientForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = e.target.elements.name.value.trim();
+      if (!name) { toast('Bedrijfsnaam is verplicht', 'error'); return; }
+      const contacts = [];
+      for (const tr of document.querySelectorAll('#newContactsBody tr')) {
+        const cn = tr.querySelector('[data-c=name]').value.trim();
+        const ce = tr.querySelector('[data-c=email]').value.trim();
+        if (!cn && !ce) continue;
+        contacts.push({ name: cn, email: ce });
+      }
+      const newClients = [...clients, { name, contacts }];
       try {
-        const r = await apiSend('/api/admin/settings', 'POST', { clients: workingClients });
+        const r = await apiSend('/api/admin/settings', 'POST', { clients: newClients });
         clients = r.settings.clients || [];
-        workingClients = JSON.parse(JSON.stringify(clients));
-        toast('Klanten opgeslagen', 'success');
-        renderEdit();
+        toast(`Klant "${name}" toegevoegd`, 'success');
+        document.getElementById('cancelNewClient').click();
         renderOverview();
       } catch (err) { toast(err.message, 'error'); }
-    };
+    });
+  }
+
+  // ── Bestaande klant bewerken/verwijderen (inline) ──────────────
+  async function saveClients(updated) {
+    try {
+      const r = await apiSend('/api/admin/settings', 'POST', { clients: updated });
+      clients = r.settings.clients || [];
+      toast('Klanten opgeslagen', 'success');
+      renderOverview();
+    } catch (err) { toast(err.message, 'error'); }
   }
 
   // ── Overzicht ────────────────────────────────────────────────────
@@ -170,7 +169,7 @@
 
     const c = document.getElementById('content');
     if (list.length === 0) {
-      c.innerHTML = `<p class="subtle">Nog geen klanten.${isAdmin ? ' Gebruik het beheer-paneel hierboven om er een toe te voegen.' : ''}</p>`;
+      c.innerHTML = `<p class="subtle">Nog geen klanten.${isAdmin ? ' Klik rechtsboven op "+ Nieuwe klant".' : ''}</p>`;
       return;
     }
     if (matches.length === 0) {
@@ -180,32 +179,64 @@
     c.innerHTML = matches.map(({ client, projects, totalAvailable, totalUsed }) => {
       const pct = totalAvailable > 0 ? Math.round((totalUsed / totalAvailable) * 1000) / 10 : 0;
       return `
-        <div class="card-static" style="margin-bottom:1rem">
+        <div class="card-static" style="margin-bottom:1rem" data-client-id="${client.id}">
           <div class="card-header">
             <div>
-              <h2 style="margin:0">${escapeHtml(client.name)}</h2>
+              <h2 style="margin:0" data-display-name>${escapeHtml(client.name)}</h2>
               <p class="subtle" style="margin:.25rem 0">${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}</p>
             </div>
-            <div class="subtle" style="text-align:right">
-              <div><strong>${totalUsed.toFixed(1)}</strong> / ${totalAvailable.toFixed(1)} uur</div>
-              ${totalAvailable > 0 ? `<div><span class="badge ${percentageBadgeClass(pct)}">${pct}%</span></div>` : ''}
+            <div style="display:flex; align-items:flex-start; gap:.5rem">
+              <div class="subtle" style="text-align:right">
+                <div><strong>${totalUsed.toFixed(1)}</strong> / ${totalAvailable.toFixed(1)} uur</div>
+                ${totalAvailable > 0 ? `<div><span class="badge ${percentageBadgeClass(pct)}">${pct}%</span></div>` : ''}
+              </div>
+              ${isAdmin ? `<button class="btn btn-ghost" type="button" data-edit="${client.id}" style="font-size:.8rem; padding:.3rem .6rem">✏ Bewerk</button>` : ''}
             </div>
           </div>
 
-          ${(client.contacts && client.contacts.length) ? `
-            <div style="margin-top:.5rem">
-              <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em">Contactpersonen</div>
-              <ul style="margin:.25rem 0 0; padding-left:1.2rem">
-                ${client.contacts.map((cc) => `<li>${escapeHtml(cc.name || '')}${cc.email ? ` — <a href="mailto:${escapeHtml(cc.email)}">${escapeHtml(cc.email)}</a>` : ''}</li>`).join('')}
-              </ul>
-            </div>` : ''}
+          <div data-display>
+            ${(client.contacts && client.contacts.length) ? `
+              <div style="margin-top:.5rem">
+                <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em">Contactpersonen</div>
+                <ul style="margin:.25rem 0 0; padding-left:1.2rem">
+                  ${client.contacts.map((cc) => `<li>${escapeHtml(cc.name || '')}${cc.email ? ` — <a href="mailto:${escapeHtml(cc.email)}">${escapeHtml(cc.email)}</a>` : ''}</li>`).join('')}
+                </ul>
+              </div>` : '<p class="subtle" style="margin:.25rem 0 0">Geen contactpersonen.</p>'}
+          </div>
+
+          <div data-edit-form class="hidden" style="margin-top:.75rem; padding-top:.75rem; border-top:1px solid var(--border)">
+            <label>
+              <span class="lbl">Bedrijfsnaam</span>
+              <input type="text" data-field="name" value="${escapeHtml(client.name)}">
+            </label>
+            <h4>Contactpersonen</h4>
+            <table class="table" style="margin:.25rem 0">
+              <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+              <tbody data-contacts>
+                ${(client.contacts && client.contacts.length ? client.contacts : [{ name: '', email: '' }]).map((cc) => `
+                  <tr>
+                    <td><input type="text" data-c="name" value="${escapeHtml(cc.name || '')}"></td>
+                    <td><input type="email" data-c="email" value="${escapeHtml(cc.email || '')}"></td>
+                    <td><button class="btn btn-ghost" type="button" data-row-remove>Verwijder</button></td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+            <button class="btn btn-ghost" type="button" data-add-row>+ Contact toevoegen</button>
+            <div style="margin-top:.75rem; display:flex; gap:.5rem; justify-content:space-between">
+              <div style="display:flex; gap:.5rem">
+                <button class="btn btn-primary" type="button" data-save>Opslaan</button>
+                <button class="btn btn-ghost" type="button" data-cancel>Annuleren</button>
+              </div>
+              <button class="btn btn-ghost" type="button" data-delete style="color:var(--danger)">🗑 Klant verwijderen</button>
+            </div>
+          </div>
 
           ${projects.length > 0 ? `
             <table class="table" style="margin-top:.75rem">
               <thead><tr><th>Project</th><th>Status</th><th>Uren</th><th>%</th></tr></thead>
               <tbody>
                 ${projects.map((p) => `
-                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}" data-row>
                     <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
                     <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
                     <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
@@ -216,8 +247,79 @@
         </div>`;
     }).join('');
 
-    for (const tr of c.querySelectorAll('tr.clickable')) {
+    // Klik op projectrij → detail
+    for (const tr of c.querySelectorAll('tr[data-row]')) {
       tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    }
+
+    if (isAdmin) bindClientEditHandlers(c);
+  }
+
+  function bindClientEditHandlers(root) {
+    for (const editBtn of root.querySelectorAll('button[data-edit]')) {
+      editBtn.onclick = () => {
+        const card = editBtn.closest('[data-client-id]');
+        card.querySelector('[data-display]').classList.add('hidden');
+        card.querySelector('[data-edit-form]').classList.remove('hidden');
+        editBtn.classList.add('hidden');
+      };
+    }
+    for (const card of root.querySelectorAll('[data-client-id]')) {
+      const form = card.querySelector('[data-edit-form]');
+      if (!form) continue;
+      const cancelBtn = form.querySelector('[data-cancel]');
+      if (cancelBtn) cancelBtn.onclick = () => {
+        card.querySelector('[data-display]').classList.remove('hidden');
+        form.classList.add('hidden');
+        const editBtn = card.querySelector('button[data-edit]');
+        if (editBtn) editBtn.classList.remove('hidden');
+      };
+      const addRow = form.querySelector('[data-add-row]');
+      if (addRow) addRow.onclick = () => {
+        const tbody = form.querySelector('tbody[data-contacts]');
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><input type="text" data-c="name"></td>
+          <td><input type="email" data-c="email"></td>
+          <td><button class="btn btn-ghost" type="button" data-row-remove>Verwijder</button></td>`;
+        tbody.appendChild(tr);
+        bindRowRemove(form);
+      };
+      bindRowRemove(form);
+
+      const saveBtn = form.querySelector('[data-save]');
+      if (saveBtn) saveBtn.onclick = async () => {
+        const id = card.dataset.clientId;
+        const name = form.querySelector('[data-field=name]').value.trim();
+        if (!name) { toast('Bedrijfsnaam is verplicht', 'error'); return; }
+        const contacts = [];
+        for (const tr of form.querySelectorAll('tbody[data-contacts] tr')) {
+          const cn = tr.querySelector('[data-c=name]').value.trim();
+          const ce = tr.querySelector('[data-c=email]').value.trim();
+          if (!cn && !ce) continue;
+          contacts.push({ name: cn, email: ce });
+        }
+        const updated = clients.map((c) => c.id === id ? { ...c, name, contacts } : c);
+        await saveClients(updated);
+      };
+
+      const delBtn = form.querySelector('[data-delete]');
+      if (delBtn) delBtn.onclick = async () => {
+        const id = card.dataset.clientId;
+        const client = clients.find((c) => c.id === id);
+        if (!confirm(`"${client?.name || 'deze klant'}" verwijderen?`)) return;
+        await saveClients(clients.filter((c) => c.id !== id));
+      };
+    }
+  }
+  function bindRowRemove(form) {
+    for (const btn of form.querySelectorAll('button[data-row-remove]')) {
+      btn.onclick = () => {
+        const tbody = form.querySelector('tbody[data-contacts]');
+        const tr = btn.closest('tr');
+        if (tbody.children.length > 1) tr.remove();
+        else tr.querySelectorAll('input').forEach((i) => (i.value = ''));
+      };
     }
   }
 

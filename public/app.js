@@ -2,10 +2,7 @@
 
 export async function apiGet(url) {
   const r = await fetch(url, { credentials: 'same-origin' });
-  if (r.status === 401) {
-    location.href = '/login.html';
-    throw new Error('not authenticated');
-  }
+  if (r.status === 401) { location.href = '/login.html'; throw new Error('not authenticated'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
   return r.json();
 }
@@ -19,10 +16,7 @@ export async function apiSend(url, method, body, isMultipart = false) {
     init.body = JSON.stringify(body);
   }
   const r = await fetch(url, init);
-  if (r.status === 401) {
-    location.href = '/login.html';
-    throw new Error('not authenticated');
-  }
+  if (r.status === 401) { location.href = '/login.html'; throw new Error('not authenticated'); }
   let data = {};
   try { data = await r.json(); } catch {}
   if (!r.ok) throw new Error(data.error || r.statusText);
@@ -66,16 +60,24 @@ export function statusLabel(value) {
   return opt ? opt.label : value;
 }
 
+export const MODULE_OPTIONS = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
+
 export function fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = String(iso).split('-');
   return `${d}-${m}-${y}`;
 }
 
+export function fmtDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('nl-NL', { dateStyle: 'short', timeStyle: 'short' });
+}
+
 export function daysFromNow(iso) {
   if (!iso) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
   const target = new Date(iso);
   if (Number.isNaN(target.getTime())) return null;
   target.setHours(0, 0, 0, 0);
@@ -91,6 +93,12 @@ export function deadlineBadge(iso) {
   return `<span class="badge badge-blue">${fmtDate(iso)} (${d}d)</span>`;
 }
 
+// Europese euro-notatie zonder decimalen: € 14.500
+export function fmtEuro(amount) {
+  const rounded = Math.round(Number(amount) || 0);
+  return '€' + rounded.toLocaleString('nl-NL', { maximumFractionDigits: 0 });
+}
+
 const ACTION_LABELS = {
   created: 'Project aangemaakt',
   name_changed: 'Naam gewijzigd',
@@ -98,6 +106,7 @@ const ACTION_LABELS = {
   available_hours_changed: 'Beschikbare uren aangepast',
   hourly_rate_changed: 'Uurtarief aangepast',
   module_changed: 'Module gewijzigd',
+  modules_changed: 'Modules gewijzigd',
   manager_changed: 'Projectmanager gewijzigd',
   deadline_changed: 'Deadline gewijzigd',
   start_date_changed: 'Startdatum gewijzigd',
@@ -117,7 +126,13 @@ export function activityDescription(entry) {
   const d = entry.details || {};
   if (entry.action === 'status_changed') return `${label}: ${statusLabel(d.from)} → ${statusLabel(d.to)}`;
   if (entry.action === 'available_hours_changed' || entry.action === 'hourly_rate_changed') return `${label}: ${d.from} → ${d.to}`;
-  if (entry.action === 'name_changed' || entry.action === 'module_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  if (entry.action === 'name_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  if (entry.action === 'module_changed') return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  if (entry.action === 'modules_changed') {
+    const f = Array.isArray(d.from) ? d.from.join(', ') : '—';
+    const t = Array.isArray(d.to) ? d.to.join(', ') : '—';
+    return `${label}: ${f || '—'} → ${t || '—'}`;
+  }
   if (entry.action === 'deadline_changed' || entry.action === 'start_date_changed') {
     return `${label}: ${d.from ? fmtDate(d.from) : '—'} → ${d.to ? fmtDate(d.to) : '—'}`;
   }
@@ -137,9 +152,7 @@ export async function renderTopbar(activePath) {
     { href: '/planning.html', label: 'Planning' },
     { href: '/clients.html', label: 'Klanten' },
   ];
-  if (isAdmin) {
-    links.push({ href: '/admin-settings.html', label: 'Instellingen' });
-  }
+  if (isAdmin) links.push({ href: '/admin-settings.html', label: 'Instellingen' });
   const topbar = document.getElementById('topbar');
   if (topbar) {
     topbar.innerHTML = `

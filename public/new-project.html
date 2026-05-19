@@ -11,20 +11,18 @@
   <div class="card-static" id="step1">
     <h3>Stap 1 — Upload PDF (optioneel)</h3>
     <p class="subtle">Upload de offerte/voorstel-PDF. Claude leest hier automatisch beschikbare uren,
-      fases, beschrijving, uurtarief en uitzonderingen uit. De PDF wordt opgeslagen zodat je hem later kunt downloaden vanaf de project-pagina.</p>
+      fases, beschrijving, uurtarief en uitzonderingen uit.</p>
     <form id="pdfForm" class="form">
       <label>PDF-bestand<input type="file" name="pdf" accept="application/pdf" required></label>
-
       <label>
         <span class="lbl">Prompt / instructies voor Claude</span>
         <textarea name="prompt" id="promptField" rows="10"></textarea>
       </label>
       <p class="subtle" style="margin-top:-.5rem">
-        Tweak deze tekst als je offerte een afwijkend formaat heeft. Wordt onthouden voor je volgende upload.
+        Tweak deze tekst als je offerte een afwijkend formaat heeft.
         <a href="#" id="resetPromptBtn">Herstel naar default</a>
         <span id="saveDefaultWrapper" class="hidden"> · <a href="#" id="saveDefaultBtn">Sla op als organisatie-default</a></span>
       </p>
-
       <button class="btn btn-primary" type="submit">Lees PDF in met Claude</button>
     </form>
     <p class="subtle" style="margin-top:1rem">
@@ -55,37 +53,23 @@
         </label>
       </div>
 
+      <h4>Modules <span class="required">*</span> <span class="subtle" style="font-weight:400">(minstens 1 verplicht — meerdere mogelijk)</span></h4>
+      <div class="checkbox-grid" id="modulesGrid"></div>
+
       <div class="form-row">
-        <label>
-          <span class="lbl">Module</span>
-          <select name="module" id="moduleField">
-            <option value="">— Kies module —</option>
-            <option value="PowerImprove">PowerImprove</option>
-            <option value="PowerClass">PowerClass</option>
-            <option value="PowerText">PowerText</option>
-            <option value="PowerImage">PowerImage</option>
-            <option value="PowerRelate">PowerRelate</option>
-            <option value="Project">Project</option>
-          </select>
-        </label>
         <label>
           <span class="lbl">Klant</span>
           <select name="client_id" id="clientField"><option value="">— Geen —</option></select>
         </label>
         <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
-          <input type="checkbox" name="is_poc" style="width:auto"> Dit is een POC (proof-of-concept)
+          <input type="checkbox" name="is_poc" style="width:auto"> Dit is een POC
         </label>
+        <label></label>
       </div>
 
       <div class="form-row">
-        <label>
-          <span class="lbl">Startdatum</span>
-          <input type="date" name="start_date">
-        </label>
-        <label>
-          <span class="lbl">Deadline</span>
-          <input type="date" name="deadline">
-        </label>
+        <label><span class="lbl">Startdatum</span><input type="date" name="start_date"></label>
+        <label><span class="lbl">Deadline</span><input type="date" name="deadline"></label>
         <label></label>
       </div>
 
@@ -104,11 +88,10 @@
 
       <label>
         <span class="lbl">Feature requests</span>
-        <textarea name="feature_requests" rows="4" placeholder="Wat moet er gebouwd worden voor deze klant om het project te laten slagen? Lijstje feature requests."></textarea>
+        <textarea name="feature_requests" rows="4" placeholder="Wat moet er gebouwd worden voor deze klant om het project te laten slagen?"></textarea>
       </label>
 
       <h4>Contactpersonen bij de klant</h4>
-      <p class="subtle" style="margin-top:-.5rem">Klant kiezen vult deze automatisch met de contacten die bij die klant horen.</p>
       <table class="table">
         <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
         <tbody id="contactsBody">
@@ -122,7 +105,6 @@
       <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
       <h4>Team</h4>
-      <p class="subtle" style="margin-top:-.5rem">Selecteer alle medewerkers die aan dit project werken.</p>
       <div id="teamGrid" class="checkbox-grid">
         <span class="subtle">Medewerkers laden…</span>
       </div>
@@ -148,7 +130,7 @@
   </div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS, escapeHtml } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS, MODULE_OPTIONS, escapeHtml } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   // Status dropdown
@@ -160,10 +142,17 @@
     statusSel.appendChild(o);
   }
 
+  // Modules checkboxes
+  document.getElementById('modulesGrid').innerHTML = MODULE_OPTIONS.map((m) => `
+    <label>
+      <input type="checkbox" name="modules" value="${m}">
+      ${m}
+    </label>`).join('');
+
   let settings = { clients: [], pdf_prompt: '' };
   try { ({ settings } = await apiGet('/api/admin/settings')); } catch {}
 
-  // Klant dropdown + autofill contacten
+  // Klanten
   const clientSel = document.getElementById('clientField');
   (settings.clients || []).forEach((c) => {
     const o = document.createElement('option');
@@ -208,8 +197,6 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     sessionStorage.removeItem(PROMPT_STORAGE_KEY);
     toast('Prompt teruggezet naar standaard', 'info');
   };
-
-  // "Sla op als organisatie-default" — alleen admin
   if (me.role === 'admin') {
     document.getElementById('saveDefaultWrapper').classList.remove('hidden');
     document.getElementById('saveDefaultBtn').onclick = async (e) => {
@@ -352,6 +339,10 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     const mbId = (f.get('moneybird_project_id') || '').trim();
     if (!mbId) { toast('Moneybird project is verplicht', 'error'); return; }
 
+    const modules = Array.from(document.querySelectorAll('#modulesGrid input[type=checkbox]:checked'))
+      .map((cb) => cb.value);
+    if (modules.length === 0) { toast('Selecteer minstens 1 module', 'error'); return; }
+
     const team = Array.from(document.querySelectorAll('#teamGrid input[type=checkbox]:checked'))
       .map((cb) => ({ moneybird_user_id: cb.dataset.empId, name: cb.dataset.empName }));
 
@@ -385,7 +376,7 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       source_pdf_filename: f.get('source_pdf_filename') || null,
       pdf_pending_token: f.get('pdf_pending_token') || null,
       status: f.get('status') || 'in_progress',
-      module: f.get('module') || '',
+      modules,
       client_id: f.get('client_id') || '',
       deadline: f.get('deadline') || '',
       start_date: f.get('start_date') || '',
