@@ -34,6 +34,20 @@
     render();
   }
 
+  async function deleteProjectFlow() {
+    const confirm1 = prompt(`Type de projectnaam om te bevestigen dat je "${project.name}" wilt verwijderen.\n\nDit verwijdert ook alle uren, notities, PDF en activity log. Dit kan NIET ongedaan worden gemaakt.`);
+    if (confirm1 === null) return;
+    if (confirm1.trim() !== project.name) {
+      toast('Naam komt niet overeen — verwijderen geannuleerd', 'error');
+      return;
+    }
+    try {
+      await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'DELETE');
+      toast('Project verwijderd', 'success');
+      setTimeout(() => { location.href = '/projects.html'; }, 600);
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
   function render() {
     const c = document.getElementById('content');
     const statusOptions = STATUS_OPTIONS.map((o) =>
@@ -45,6 +59,7 @@
     const clientOptions = `<option value="">— Geen —</option>` + clients.map((c) =>
       `<option value="${c.id}" ${c.id === project.client_id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
     const canEditManager = me.role === 'admin';
+    const canDelete = me.role === 'admin';
     const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '', receives_threshold_mails: false }]).map((c) => `
       <tr>
         <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
@@ -132,7 +147,7 @@
              <a href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>Download</a>.</p>`
           : '<p class="subtle">Nog geen PDF gekoppeld aan dit project.</p>'}
         <form id="pdfUploadForm" class="form" style="margin-top:.5rem">
-          <label>${project.has_pdf ? 'Vervang' : 'Upload'} PDF (offerte / aangepaste versie)
+          <label>${project.has_pdf ? 'Vervang' : 'Upload'} PDF
             <input type="file" name="pdf" accept="application/pdf" required>
           </label>
           <div><button class="btn btn-primary" type="submit">Upload PDF</button></div>
@@ -229,6 +244,13 @@
             </tbody></table>`
           : '<p class="subtle">Nog geen activiteit gelogd.</p>'}
       </div>
+
+      ${canDelete ? `
+        <h2 style="margin-top:3rem; color:var(--danger)">Gevaarlijke zone</h2>
+        <div class="card-static" style="border-color: rgba(239,68,68,.4)">
+          <p class="subtle" style="margin-top:0">Verwijder dit project permanent. Dit verwijdert ook alle uren, notities, PDF en activity log. <strong>Kan niet ongedaan gemaakt worden.</strong></p>
+          <button class="btn" id="deleteProjectBtn" style="background:var(--danger); color:#fff">🗑 Verwijder project</button>
+        </div>` : ''}
     `;
 
     document.getElementById('renameBtn').onclick = async () => {
@@ -243,6 +265,10 @@
         await load();
       } catch (err) { toast(err.message, 'error'); }
     };
+
+    if (canDelete) {
+      document.getElementById('deleteProjectBtn').onclick = deleteProjectFlow;
+    }
 
     document.getElementById('syncBtn').onclick = async () => {
       try {

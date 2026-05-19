@@ -1,6 +1,7 @@
 // GET /api/moneybird/projects                                - lijst Moneybird-projecten
 // GET /api/moneybird/employees                               - lijst medewerkers
 // GET /api/moneybird/time_entries?since=YYYY-MM-DD&user_id=X - alle time entries sinds datum
+//                                                              (gecached 10 min in Redis; ?nocache=1 om te omzeilen)
 import { requireUser } from '../../lib/auth.js';
 import {
   fetchProjects,
@@ -8,7 +9,12 @@ import {
   fetchAllTimeEntriesWithFilter,
   normalizeTimeEntry,
 } from '../../lib/moneybird.js';
-import { listProjects, listTimeEntries } from '../../lib/db.js';
+import {
+  listProjects,
+  listTimeEntriesBatch,
+  getCachedMoneybirdTimeEntries,
+  setCachedMoneybirdTimeEntries,
+} from '../../lib/db.js';
 
 export default async function handler(req, res) {
   const user = await requireUser(req, res);
@@ -44,9 +50,10 @@ export default async function handler(req, res) {
         }
       }
     } catch {}
+    // Vul aan met iedereen die ooit uren heeft geschreven op onze projecten
     const projects = await listProjects();
-    for (const p of projects) {
-      const entries = await listTimeEntries(p.id);
+    const entriesByProject = await listTimeEntriesBatch(projects.map((p) => p.id));
+    for (const entries of entriesByProject.values()) {
       for (const e of entries) {
         if (e.user_moneybird_id && !seen.has(e.user_moneybird_id)) {
           seen.set(e.user_moneybird_id, e.user_name || 'Onbekend');
@@ -64,14 +71,29 @@ export default async function handler(req, res) {
       let since = req.query.since;
       if (!since) {
         const d = new Date();
-        d.setDate(d.getDate() - 60);
+        d.setDate(d.getDate() - 35); // kortere range (was 60) → minder pagina's, sneller
         since = d.toISOString().slice(0, 10);
       }
+      const userId = req.query.user_id ? String(req.query.user_id) : null;
+      const noCache = req.query.nocache === '1';
+
+      if (!noCache) {
+        const cached = await getCachedMoneybirdTimeEntries(since, userId);
+        if (cached) {
+          res.setHeader('X-Cache', 'HIT');
+          res.status(200).json(cached);
+          return;
+        }
+      }
+
       const filters = [`started_after:${since}`];
-      if (req.query.user_id) filters.push(`user_id:${String(req.query.user_id)}`);
+      if (userId) filters.push(`user_id:${userId}`);
       const raw = await fetchAllTimeEntriesWithFilter(filters.join(','));
       const time_entries = raw.map(normalizeTimeEntry);
-      res.status(200).json({ time_entries, since });
+      const payload = { time_entries, since, cached_at: new Date().toISOString() };
+      await setCachedMoneybirdTimeEntries(since, userId, payload);
+      res.setHeader('X-Cache', 'MISS');
+      res.status(200).json(payload);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

@@ -1,14 +1,16 @@
-// GET   /api/projects/:id
-// GET   /api/projects/:id?action=download_pdf   - PDF download
-// PATCH /api/projects/:id                       - update (auto-logt wijzigingen)
-// PATCH /api/projects/:id  body { add_note }    - notitie toevoegen
-// PATCH /api/projects/:id  body { delete_note } - notitie verwijderen
-// PATCH /api/projects/:id  body { delete_pdf }  - PDF verwijderen
+// GET    /api/projects/:id
+// GET    /api/projects/:id?action=download_pdf - PDF download
+// PATCH  /api/projects/:id                     - update (auto-logt wijzigingen)
+// PATCH  /api/projects/:id  body { add_note }
+// PATCH  /api/projects/:id  body { delete_note }
+// PATCH  /api/projects/:id  body { delete_pdf }
+// DELETE /api/projects/:id                     - project + alle gerelateerde data verwijderen (admin)
 import crypto from 'node:crypto';
 import { requireUser } from '../../../lib/auth.js';
 import {
   getProject,
   saveProject,
+  deleteProject,
   getUserById,
   listTimeEntries,
   getPdfBlob,
@@ -48,11 +50,7 @@ function normalizeContacts(input) {
     const name = String(c.name || '').trim();
     const email = String(c.email || '').trim();
     if (!name && !email) continue;
-    out.push({
-      name,
-      email,
-      receives_threshold_mails: !!c.receives_threshold_mails,
-    });
+    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails });
   }
   return out;
 }
@@ -122,6 +120,17 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     if (req.query.action === 'download_pdf') { await streamPdf(res, project.id); return; }
     res.status(200).json({ project: await buildDetail(project) });
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    if (user.role !== 'admin') {
+      res.status(403).json({ error: 'Alleen een admin kan projecten verwijderen' });
+      return;
+    }
+    const ok = await deleteProject(project.id);
+    if (!ok) { res.status(404).json({ error: 'Niet gevonden' }); return; }
+    res.status(200).json({ ok: true, deleted_id: project.id });
     return;
   }
 

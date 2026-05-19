@@ -9,7 +9,10 @@
 <main class="container">
   <div class="page-header">
     <h1>Planning</h1>
-    <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
+    <div style="display:flex; gap:.5rem">
+      <button class="btn btn-ghost" id="refreshBtn" title="Vernieuw Moneybird-uren (omzeilt cache)">↻ Vernieuw</button>
+      <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
+    </div>
   </div>
   <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum.</p>
 
@@ -20,6 +23,7 @@
         <option value="all">Alle medewerkers</option>
       </select>
       <span class="subtle" id="filterCount"></span>
+      <span class="subtle" id="cacheStatus" style="margin-left:auto"></span>
     </label>
   </div>
 
@@ -29,35 +33,10 @@
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel } from '/app.js';
   const me = await renderTopbar('/planning.html');
 
-  // Filter: alleen in_progress / on_hold / future
   const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
-
-  const [{ projects }, { settings }] = await Promise.all([
-    apiGet('/api/projects?with_time_entries=1'),
-    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
-  ]);
-  const capacities = settings.employee_capacities || {};
-  const vacationsByEmp = settings.employee_vacations || {};
-  const isAdmin = me?.role === 'admin';
-
-  // Time entries van Moneybird (laatste 6 weken) voor "Overig"
   const WEEKS_BACK = 4;
-  const sinceDate = new Date();
-  sinceDate.setDate(sinceDate.getDate() - (WEEKS_BACK + 2) * 7);
-  const sinceIso = sinceDate.toISOString().slice(0, 10);
-  let allMoneybirdEntries = [];
-  try {
-    const r = await apiGet(`/api/moneybird/time_entries?since=${sinceIso}`);
-    allMoneybirdEntries = r.time_entries || [];
-  } catch {
-    // Niet kritiek — zonder dit werkt de pagina ook, alleen geen "Overig"
-  }
-  // Set van tracked Moneybird-project-IDs (= projecten in onze app)
-  const trackedMoneybirdIds = new Set(
-    projects.map((p) => p.moneybird_project_id).filter(Boolean).map(String)
-  );
 
-  // ── Datum/vakantie helpers ─────────────────────────────────────
+  // ── Datum-helpers ─────────────────────────────────────────────
   function todayIso() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
   function isoToDate(iso) { const [y,m,d]=iso.split('-').map(Number); return new Date(y,m-1,d); }
   function dateToIso(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
@@ -107,37 +86,88 @@
     return null;
   }
 
-  // ── Groepeer projecten per medewerker (alleen relevante statuses) ─
-  const byEmp = new Map();
-  for (const p of projects) {
-    if (!PLANNING_STATUSES.has(p.status)) continue;
-    for (const t of (p.team || [])) {
-      const key = t.moneybird_user_id;
-      if (!byEmp.has(key)) {
-        byEmp.set(key, { id: key, name: t.name, rows: [], totalOwn: 0, totalRemaining: 0, newCount: 0 });
-      }
-      const rec = byEmp.get(key);
-      const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
-      const ownHours = stat ? Number(stat.hours) || 0 : 0;
-      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
-      rec.rows.push({ project: p, ownHours, remaining });
-      rec.totalOwn += ownHours;
-      rec.totalRemaining += remaining;
-      if (p.status === 'future') rec.newCount += 1;
+  // ── Data laden (3 parallelle calls voor snelheid) ─────────────
+  let projects = [], capacities = {}, vacationsByEmp = {}, allMoneybirdEntries = [];
+  let trackedMoneybirdIds = new Set();
+  let mbCacheStatus = ''; // 'HIT' of 'MISS'
+
+  async function loadAllData(refresh = false) {
+    document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
+    document.getElementById('cacheStatus').textContent = '';
+
+    const sinceDate = new Date();
+    sinceDate.setDate(sinceDate.getDate() - (WEEKS_BACK + 1) * 7); // 5 weken terug
+    const sinceIso = sinceDate.toISOString().slice(0, 10);
+
+    // Alle drie parallel zodat de pagina sneller laadt
+    const mbUrl = `/api/moneybird/time_entries?since=${sinceIso}${refresh ? '&nocache=1' : ''}`;
+    const [projResp, settingsResp, mbResp] = await Promise.all([
+      apiGet('/api/projects?with_time_entries=1'),
+      apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
+      fetch(mbUrl, { credentials: 'same-origin' }).then(async (r) => {
+        mbCacheStatus = r.headers.get('X-Cache') || '';
+        return r.json().catch(() => ({ time_entries: [] }));
+      }).catch(() => ({ time_entries: [] })),
+    ]);
+
+    projects = projResp.projects;
+    capacities = settingsResp.settings.employee_capacities || {};
+    vacationsByEmp = settingsResp.settings.employee_vacations || {};
+    allMoneybirdEntries = mbResp.time_entries || [];
+    trackedMoneybirdIds = new Set(
+      projects.map((p) => p.moneybird_project_id).filter(Boolean).map(String)
+    );
+
+    if (mbCacheStatus === 'HIT') {
+      document.getElementById('cacheStatus').textContent = '✓ Moneybird uit cache';
+    } else if (mbCacheStatus === 'MISS') {
+      document.getElementById('cacheStatus').textContent = '✓ Moneybird fresh fetch';
     }
-  }
-  const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
 
-  const empFilter = document.getElementById('empFilter');
-  for (const e of employees) {
-    const o = document.createElement('option');
-    o.value = e.id; o.textContent = e.name;
-    empFilter.appendChild(o);
+    rebuildEmployees();
+    render();
   }
+
+  document.getElementById('refreshBtn').onclick = async () => {
+    toast('Moneybird-uren vernieuwen…', 'info');
+    await loadAllData(true);
+    toast('Vernieuwd', 'success');
+  };
+
+  // ── Groepering ────────────────────────────────────────────────
+  let employees = [];
+  const isAdmin = me?.role === 'admin';
   const STORAGE_KEY = 'pm_planning_emp_filter';
-  empFilter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
 
-  // ── Weekly breakdown ───────────────────────────────────────────
+  function rebuildEmployees() {
+    const byEmp = new Map();
+    for (const p of projects) {
+      if (!PLANNING_STATUSES.has(p.status)) continue;
+      for (const t of (p.team || [])) {
+        const key = t.moneybird_user_id;
+        if (!byEmp.has(key)) {
+          byEmp.set(key, { id: key, name: t.name, rows: [], totalOwn: 0, totalRemaining: 0, newCount: 0 });
+        }
+        const rec = byEmp.get(key);
+        const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === key);
+        const ownHours = stat ? Number(stat.hours) || 0 : 0;
+        const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
+        rec.rows.push({ project: p, ownHours, remaining });
+        rec.totalOwn += ownHours;
+        rec.totalRemaining += remaining;
+        if (p.status === 'future') rec.newCount += 1;
+      }
+    }
+    employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
+
+    // Vul filter dropdown
+    const empFilter = document.getElementById('empFilter');
+    const cur = empFilter.value || sessionStorage.getItem(STORAGE_KEY) || 'all';
+    empFilter.innerHTML = '<option value="all">Alle medewerkers</option>' +
+      employees.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join('');
+    empFilter.value = cur;
+  }
+
   function buildWeeklyForEmployee(empId) {
     const today = new Date(); today.setHours(0,0,0,0);
     const thisMonday = mondayOf(today);
@@ -147,10 +177,8 @@
       d.setDate(d.getDate() - 7 * i);
       weekStarts.push(dateToIso(d));
     }
-    // map: weekIso -> { perTracked: Map<projectId, hours>, otherEntries: [{project_name, hours}] }
     const weekMap = new Map(weekStarts.map((w) => [w, { perTracked: new Map(), other: new Map(), otherTotal: 0 }]));
 
-    // Tracked: uit /api/projects time_entries
     for (const p of projects) {
       for (const e of (p.time_entries || [])) {
         if (e.user_moneybird_id !== empId || !e.started_at) continue;
@@ -160,7 +188,6 @@
         cur.set(p.id, (cur.get(p.id) || 0) + (Number(e.hours) || 0));
       }
     }
-    // Overig: uit Moneybird (entries die NIET op een tracked project zitten)
     for (const e of allMoneybirdEntries) {
       if (e.user_moneybird_id !== empId || !e.started_at) continue;
       if (e.moneybird_project_id && trackedMoneybirdIds.has(String(e.moneybird_project_id))) continue;
@@ -191,8 +218,8 @@
     });
   }
 
-  // ── Render ────────────────────────────────────────────────────
   function render() {
+    const empFilter = document.getElementById('empFilter');
     const value = empFilter.value;
     sessionStorage.setItem(STORAGE_KEY, value);
     const shown = value === 'all' ? employees : employees.filter((e) => e.id === value);
@@ -201,6 +228,10 @@
       `${shown.length} van ${employees.length} medewerker${employees.length === 1 ? '' : 's'}`;
 
     const c = document.getElementById('content');
+    if (employees.length === 0) {
+      c.innerHTML = `<p class="subtle">Geen actieve medewerkers met toegewezen projecten in status "In progress", "Future" of "On hold".</p>`;
+      return;
+    }
     if (shown.length === 0) {
       c.innerHTML = `<p class="subtle">Geen medewerkers gevonden voor deze filter.</p>`;
       return;
@@ -266,18 +297,6 @@
           ${overigPanel}`;
       }).join('');
 
-      const weeklyHtml = `
-        <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
-        <table class="table" style="margin:0">
-          <thead><tr>
-            <th>Week (ma)</th>
-            <th>Projecten</th>
-            <th>Totaal</th>
-            <th>vs. capaciteit</th>
-          </tr></thead>
-          <tbody>${weeklyRows}</tbody>
-        </table>`;
-
       return `
         <div class="card-static" style="margin-bottom:1.25rem" data-emp-id="${e.id}">
           <div class="card-header" style="margin-bottom:.75rem">
@@ -334,7 +353,13 @@
             </tbody>
           </table>
 
-          ${weeklyHtml}
+          <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
+          <table class="table" style="margin:0">
+            <thead><tr>
+              <th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th>
+            </tr></thead>
+            <tbody>${weeklyRows}</tbody>
+          </table>
         </div>`;
     }).join('');
 
@@ -381,14 +406,12 @@
     } catch (err) { toast(err.message, 'error'); }
   }
 
-  empFilter.addEventListener('change', render);
+  document.getElementById('empFilter').addEventListener('change', render);
 
   // ── Excel export ──────────────────────────────────────────────
   document.getElementById('exportBtn').onclick = () => {
     if (typeof XLSX === 'undefined') { toast('Excel-library niet geladen', 'error'); return; }
     const wb = XLSX.utils.book_new();
-
-    // Sheet 1: per medewerker overzicht
     const sumRows = employees.map((e) => {
       const cap = Number(capacities[e.id]) || 0;
       const periods = vacationsByEmp[e.id] || [];
@@ -409,17 +432,13 @@
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sumRows), 'Per medewerker');
 
-    // Sheet 2: per (medewerker, project) toewijzing
     const assignRows = [];
     for (const e of employees) {
       for (const r of e.rows) {
         const p = r.project;
         assignRows.push({
-          'Medewerker': e.name,
-          'Project': p.name,
-          'Module': p.module || '',
-          'Status': statusLabel(p.status),
-          'POC': p.is_poc ? 'Ja' : '',
+          'Medewerker': e.name, 'Project': p.name, 'Module': p.module || '',
+          'Status': statusLabel(p.status), 'POC': p.is_poc ? 'Ja' : '',
           'Deadline': p.deadline || '',
           'Uren door persoon': Math.round(r.ownHours * 10) / 10,
           'Resterend op project': Math.round(r.remaining * 10) / 10,
@@ -429,28 +448,15 @@
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(assignRows), 'Toewijzingen');
 
-    // Sheet 3: weekly breakdown per (medewerker, week, project + overig)
     const weeklyRows = [];
     for (const e of employees) {
       const weeks = buildWeeklyForEmployee(e.id);
       for (const w of weeks) {
         for (const pp of w.perProject) {
-          weeklyRows.push({
-            'Medewerker': e.name,
-            'Week (ma)': w.weekStart,
-            'Project': pp.project_name,
-            'Bron': 'toegewezen',
-            'Uren': Math.round(pp.hours * 10) / 10,
-          });
+          weeklyRows.push({ 'Medewerker': e.name, 'Week (ma)': w.weekStart, 'Project': pp.project_name, 'Bron': 'toegewezen', 'Uren': Math.round(pp.hours * 10) / 10 });
         }
         for (const od of w.otherDist) {
-          weeklyRows.push({
-            'Medewerker': e.name,
-            'Week (ma)': w.weekStart,
-            'Project': od.project_name,
-            'Bron': 'overig (Moneybird)',
-            'Uren': Math.round(od.hours * 10) / 10,
-          });
+          weeklyRows.push({ 'Medewerker': e.name, 'Week (ma)': w.weekStart, 'Project': od.project_name, 'Bron': 'overig (Moneybird)', 'Uren': Math.round(od.hours * 10) / 10 });
         }
       }
     }
@@ -460,11 +466,7 @@
     toast('Excel gedownload', 'success');
   };
 
-  if (employees.length === 0) {
-    document.getElementById('content').innerHTML =
-      `<p class="subtle">Geen actieve medewerkers met toegewezen projecten in status "In progress", "Future" of "On hold".</p>`;
-  } else {
-    render();
-  }
+  // Eerste load
+  await loadAllData();
 </script>
 </body></html>

@@ -1,5 +1,6 @@
 // GET /api/projects                    -> lijst projecten
 // GET /api/projects?format=xlsx        -> Excel-export
+// GET /api/projects?with_time_entries=1 -> incl. time entries (voor planning)
 // POST /api/projects                   -> nieuw project
 import { Redis } from '@upstash/redis';
 import * as XLSX from 'xlsx';
@@ -9,7 +10,7 @@ import {
   listProjects,
   saveProject,
   listUsers,
-  listTimeEntries,
+  listTimeEntriesBatch,
   savePdfBlob,
   getSettings,
 } from '../../lib/db.js';
@@ -53,8 +54,7 @@ function normalizeStatus(s) { return VALID_STATUSES.includes(String(s || '').toL
 function normalizeModule(m) { return VALID_MODULES.includes(String(m || '').trim()) ? String(m).trim() : ''; }
 function normalizeDate(d) { return isIsoDate(d) ? String(d) : ''; }
 
-async function withStats(project) {
-  const entries = await listTimeEntries(project.id);
+function enrichWithStats(project, entries) {
   const hoursUsed = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
   const avail = Number(project.available_hours) || 0;
   const pct = avail > 0 ? Math.round((hoursUsed / avail) * 1000) / 10 : 0;
@@ -129,22 +129,26 @@ export default async function handler(req, res) {
   if (!user) return;
 
   if (req.method === 'GET') {
-    let projects = await listProjects();
+    // Parallel: projecten, users
+    const [allProjects, users] = await Promise.all([listProjects(), listUsers()]);
+    let projects = allProjects;
     if (user.role !== 'admin') {
       projects = projects.filter((p) => p.manager_id === user.id);
     }
-    const users = await listUsers();
+    // Eén pipeline-call voor alle time entries van deze projecten
+    const entriesByProject = await listTimeEntriesBatch(projects.map((p) => p.id));
+
     const wantsTimeEntries = req.query.with_time_entries === '1';
-    const enriched = await Promise.all(
-      projects.map(async (p) => {
-        const stats = await withStats(p);
+    const enriched = projects
+      .map((p) => {
+        const entries = entriesByProject.get(p.id) || [];
+        const stats = enrichWithStats(p, entries);
         const mgr = users.find((u) => u.id === p.manager_id);
         const result = { ...stats, manager_name: mgr?.name || null };
         if (!wantsTimeEntries) delete result.time_entries;
         return result;
       })
-    );
-    enriched.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
     if (req.query.format === 'xlsx') {
       const settings = await getSettings();
