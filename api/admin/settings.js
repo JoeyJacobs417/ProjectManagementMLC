@@ -1,12 +1,13 @@
-// GET   /api/admin/settings  - alle instellingen (alle ingelogde users mogen lezen)
-// POST  /api/admin/settings  - update (alleen aanwezige velden in body); admin-only
-// POST  /api/admin/settings?action=test_report - stuur direct een test-rapportage; admin-only
+// GET   /api/admin/settings  - alle instellingen (alle ingelogde users)
+// POST  /api/admin/settings  - update (alleen aanwezige velden); admin-only
+// POST  /api/admin/settings?action=test_report - test-rapportage; admin-only
 import crypto from 'node:crypto';
 import { requireUser, requireAdmin } from '../../lib/auth.js';
 import { getSettings, saveSettings } from '../../lib/db.js';
-import { sendProjectReport } from '../../lib/notify.js';
+import { sendProjectReport, DEFAULT_TEMPLATES } from '../../lib/notify.js';
 
 const REPORT_PERIODS = ['off', 'weekly', 'monthly'];
+const VALID_TEMPLATE_KEYS = Object.keys(DEFAULT_TEMPLATES);
 
 function normalizeCapacities(input) {
   if (!input || typeof input !== 'object') return {};
@@ -64,12 +65,26 @@ function normalizeClients(input) {
   return out;
 }
 
+function normalizeMailTemplates(input) {
+  if (!input || typeof input !== 'object') return {};
+  const out = {};
+  for (const key of VALID_TEMPLATE_KEYS) {
+    const t = input[key];
+    if (!t || typeof t !== 'object') continue;
+    const subject = String(t.subject || '').trim();
+    const body = String(t.body || '').trim();
+    // Sla alleen op als er iets ingevuld is (anders gebruikt notify.js de default)
+    if (subject || body) out[key] = { subject, body };
+  }
+  return out;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const user = await requireUser(req, res);
     if (!user) return;
     const s = await getSettings();
-    res.status(200).json({ settings: s });
+    res.status(200).json({ settings: s, default_templates: DEFAULT_TEMPLATES });
     return;
   }
 
@@ -104,6 +119,7 @@ export default async function handler(req, res) {
     if (b.employee_capacities !== undefined) patch.employee_capacities = normalizeCapacities(b.employee_capacities);
     if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
     if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);
+    if (b.mail_templates !== undefined) patch.mail_templates = normalizeMailTemplates(b.mail_templates);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;

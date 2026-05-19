@@ -26,17 +26,16 @@
 
       <h4>Deadlines</h4>
       <label>Stuur een mail wanneer een project-deadline binnen
-        <input type="number" step="1" name="deadline_alert_days" style="width:100px;display:inline-block;margin:0 .4rem"> dagen valt (en opnieuw als de deadline verlopen is)
+        <input type="number" step="1" name="deadline_alert_days" style="width:100px;display:inline-block;margin:0 .4rem"> dagen valt
       </label>
 
       <h4>Ontvangers van urenverbruik-, inactiviteits- en deadline-mails</h4>
-      <p class="subtle" style="margin-top:-.5rem">Deze mails gaan altijd automatisch naar de <strong>projectmanager van het betreffende project</strong> en naar alle <strong>actieve admins</strong>. Hieronder kun je extra mailadressen opgeven die deze mails óók moeten ontvangen.</p>
+      <p class="subtle" style="margin-top:-.5rem">Deze mails gaan altijd naar de <strong>projectmanager</strong> + alle <strong>actieve admins</strong>. Bij <em>urenverbruik</em>-mails worden ook opt-in klantcontacten meegenomen (zie project-pagina). Hieronder kun je extra mailadressen opgeven.</p>
       <label>Extra ontvangers (komma-gescheiden)
         <input type="text" name="notify_emails_extra" placeholder="bv. directie@bedrijf.nl, finance@bedrijf.nl"></label>
       <div class="subtle" id="recipientsPreview" style="background:var(--bg-soft); padding:.6rem .85rem; border-radius:8px; font-size:.85rem"></div>
 
       <h4>Periodieke rapportage</h4>
-      <p class="subtle" style="margin-top:-.4rem">Verstuurt automatisch een samenvatting van alle "In progress" projecten met urenstatus. <strong>Let op:</strong> de ontvangers van de rapportage zijn alleen wie je hieronder invult — geen automatische PM/admin-lijst.</p>
       <div class="form-row">
         <label>Periode
           <select name="report_period">
@@ -58,13 +57,28 @@
     </form>
   </div>
 
+  <h2 style="margin-top:3rem">Mail-teksten</h2>
+  <p class="subtle">Pas de inhoud (onderwerp + body) van de automatische mails aan. Laat een veld leeg om de ingebakken default te gebruiken.</p>
+  <div class="card-static">
+    <p class="subtle" style="margin-top:0; font-size:.85rem">
+      Beschikbare placeholders per template — gebruik bv. <code>{project_name}</code>:<br>
+      <strong>Threshold (warning/critical/exceeded):</strong> {project_name}, {percentage}, {hours_used}, {available_hours}, {threshold_warning}, {threshold_critical}, {threshold_exceeded}<br>
+      <strong>Inactivity:</strong> {project_name}, {user_name}, {returning_date}, {days_since}, {hours}, {threshold}<br>
+      <strong>Deadline approaching:</strong> {project_name}, {deadline_date}, {days_until}<br>
+      <strong>Deadline passed:</strong> {project_name}, {deadline_date}, {days_overdue}
+    </p>
+    <form id="mailTemplatesForm" class="form" id="templatesForm">
+      <div id="templatesContainer"></div>
+      <div><button class="btn btn-primary" type="submit">Mail-teksten opslaan</button></div>
+    </form>
+  </div>
+
   <p class="subtle" style="margin-top:1.5rem">
-    💡 <strong>Klanten beheren?</strong> Dat doe je op de pagina <a href="/clients.html">Klanten</a>.<br>
-    💡 <strong>PDF-prompt voor Claude aanpassen?</strong> Dat doe je op de pagina <a href="/new-project.html">Nieuw project</a> — daar kun je 'm tweaken per upload en (als admin) opslaan als organisatie-default.
+    💡 <strong>Klanten beheren?</strong> <a href="/clients.html">Klanten</a>.<br>
+    💡 <strong>PDF-prompt voor Claude aanpassen?</strong> <a href="/new-project.html">Nieuw project</a>.
   </p>
 
   <h2 style="margin-top:3rem">Capaciteit per medewerker</h2>
-  <p class="subtle">Uren/week per medewerker — gebruikt op de Planning-pagina.</p>
   <div class="card-static">
     <form id="capacitiesForm" class="form">
       <div id="capacitiesGrid"><span class="subtle">Medewerkers laden…</span></div>
@@ -100,7 +114,7 @@
   const me = await renderTopbar('/admin-settings.html');
   if (!me || me.role !== 'admin') location.href = '/dashboard.html';
 
-  const [{ settings }, { users: allUsers }] = await Promise.all([
+  const [{ settings, default_templates }, { users: allUsers }] = await Promise.all([
     apiGet('/api/admin/settings'),
     apiGet('/api/admin/users').catch(() => ({ users: [] })),
   ]);
@@ -121,13 +135,11 @@
     const adminEmails = activeAdmins.map((u) => `${u.name} <${u.email}>`);
     const lines = [];
     lines.push('<strong>Wie krijgt urenverbruik-, inactiviteits- en deadline-mails?</strong>');
-    lines.push('• <em>Projectmanager van het betreffende project</em> (varieert per mail)');
-    if (adminEmails.length === 0) {
-      lines.push('• Geen actieve admins gevonden');
-    } else {
-      lines.push(`• Actieve admins: ${adminEmails.map(escapeHtml).join(', ')}`);
-    }
+    lines.push('• <em>Projectmanager van het betreffende project</em>');
+    if (adminEmails.length === 0) lines.push('• Geen actieve admins gevonden');
+    else lines.push(`• Actieve admins: ${adminEmails.map(escapeHtml).join(', ')}`);
     if (extra.length) lines.push(`• Extra: ${extra.map(escapeHtml).join(', ')}`);
+    lines.push('• Klantcontacten <em>met opt-in voor urenverbruik-mails</em> (alleen voor threshold-mails)');
     document.getElementById('recipientsPreview').innerHTML = lines.join('<br>');
   }
   updateRecipientsPreview();
@@ -151,18 +163,76 @@
     try { await saveMainSettings(); toast('Instellingen opgeslagen', 'success'); }
     catch (err) { toast(err.message, 'error'); }
   });
-
   document.getElementById('testReportBtn').onclick = async () => {
     try {
       await saveMainSettings();
       const r = await apiSend('/api/admin/settings?action=test_report', 'POST', {});
       if (r.sent) toast(`Test-rapportage verstuurd naar ${r.recipients.length} ontvanger(s) (${r.count} projecten).`, 'success');
-      else if (r.reason === 'no_recipients') toast('Geen ontvangers ingevuld — vul ze in en probeer opnieuw.', 'error');
+      else if (r.reason === 'no_recipients') toast('Geen ontvangers ingevuld.', 'error');
       else if (r.reason === 'no_projects') toast('Geen "In progress" projecten om te rapporteren.', 'info');
       else toast(`Niet verstuurd: ${r.reason}`, 'info');
     } catch (err) { toast(err.message, 'error'); }
   };
 
+  // ── Mail templates ─────────────────────────────────────────────
+  const TEMPLATE_LABELS = {
+    threshold_warning: 'Urenverbruik — waarschuwing',
+    threshold_critical: 'Urenverbruik — kritiek',
+    threshold_exceeded: 'Urenverbruik — overschreden',
+    inactivity: 'Inactiviteit',
+    deadline_approaching: 'Deadline nadert',
+    deadline_passed: 'Deadline verlopen',
+  };
+  const tplContainer = document.getElementById('templatesContainer');
+  const userTpls = settings.mail_templates || {};
+  tplContainer.innerHTML = Object.keys(TEMPLATE_LABELS).map((key) => {
+    const userT = userTpls[key] || {};
+    const def = default_templates[key] || { subject: '', body: '' };
+    return `
+      <details style="margin-bottom:.75rem" ${userTpls[key] ? 'open' : ''}>
+        <summary style="cursor:pointer; font-weight:600">${escapeHtml(TEMPLATE_LABELS[key])} ${userTpls[key] ? '<span class="badge badge-blue">aangepast</span>' : ''}</summary>
+        <div style="padding:.75rem 0">
+          <label>
+            <span class="lbl">Onderwerp</span>
+            <input type="text" data-tpl="${key}" data-field="subject" value="${escapeHtml(userT.subject || '')}" placeholder="${escapeHtml(def.subject)}">
+          </label>
+          <label style="margin-top:.5rem">
+            <span class="lbl">Body (HTML)</span>
+            <textarea data-tpl="${key}" data-field="body" rows="8" placeholder="${escapeHtml(def.body).replace(/"/g, '&quot;')}">${escapeHtml(userT.body || '')}</textarea>
+          </label>
+          <p class="subtle" style="margin-top:.4rem; font-size:.8rem">
+            <a href="#" data-reset-tpl="${key}">Reset naar default</a>
+          </p>
+        </div>
+      </details>`;
+  }).join('');
+
+  tplContainer.querySelectorAll('a[data-reset-tpl]').forEach((a) => {
+    a.onclick = (e) => {
+      e.preventDefault();
+      const key = a.dataset.resetTpl;
+      tplContainer.querySelector(`input[data-tpl="${key}"][data-field=subject]`).value = '';
+      tplContainer.querySelector(`textarea[data-tpl="${key}"][data-field=body]`).value = '';
+      toast('Gereset naar default — klik op "Mail-teksten opslaan" om door te voeren', 'info');
+    };
+  });
+
+  document.getElementById('mailTemplatesForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const result = {};
+    for (const key of Object.keys(TEMPLATE_LABELS)) {
+      const subject = tplContainer.querySelector(`input[data-tpl="${key}"][data-field=subject]`).value;
+      const body = tplContainer.querySelector(`textarea[data-tpl="${key}"][data-field=body]`).value;
+      result[key] = { subject, body };
+    }
+    try {
+      await apiSend('/api/admin/settings', 'POST', { mail_templates: result });
+      toast('Mail-teksten opgeslagen', 'success');
+      setTimeout(() => location.reload(), 600);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // ── Capaciteiten ──────────────────────────────────────────────
   const { employees } = await apiGet('/api/moneybird/employees').catch(() => ({ employees: [] }));
   const caps = settings.employee_capacities || {};
   const capGrid = document.getElementById('capacitiesGrid');
@@ -197,6 +267,7 @@
     } catch (err) { toast(err.message, 'error'); }
   });
 
+  // ── Gebruikers ────────────────────────────────────────────────
   async function refreshUsers() {
     const { users } = await apiGet('/api/admin/users');
     document.getElementById('usersTable').innerHTML = `
@@ -206,11 +277,17 @@
           ${users.map((u) => `
             <tr>
               <td>
-                <input type="text" value="${escapeHtml(u.name)}" data-name="${u.id}" style="min-width:150px">
+                <input type="text" value="${escapeHtml(u.name)}" data-name="${u.id}" style="min-width:140px">
                 <button class="btn btn-ghost" data-action="rename" data-id="${u.id}">Hernoem</button>
               </td>
               <td>${escapeHtml(u.email)}</td>
-              <td>${u.role}</td>
+              <td>
+                <select data-role="${u.id}">
+                  <option value="projectmanager" ${u.role === 'projectmanager' ? 'selected' : ''}>Projectmanager</option>
+                  <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                </select>
+                <button class="btn btn-ghost" data-action="change_role" data-id="${u.id}">Wijzig rol</button>
+              </td>
               <td>${u.active ? 'Ja' : 'Nee'}</td>
               <td class="actions">
                 <button class="btn btn-ghost" data-action="toggle" data-id="${u.id}">${u.active ? 'Deactiveren' : 'Activeren'}</button>
@@ -236,6 +313,12 @@
             if (!name) { toast('Naam mag niet leeg zijn', 'error'); return; }
             await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'rename', name });
             toast('Naam aangepast', 'success');
+            await refreshUsers();
+          } else if (action === 'change_role') {
+            const role = document.querySelector(`select[data-role="${id}"]`).value;
+            const r = await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'change_role', role });
+            if (r.unchanged) toast('Rol was al ' + role, 'info');
+            else toast(`Rol gewijzigd naar ${role}`, 'success');
             await refreshUsers();
           } else {
             await apiSend(`/api/admin/users/${id}`, 'PATCH', { action: 'toggle' });

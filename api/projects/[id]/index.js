@@ -1,9 +1,9 @@
-// GET   /api/projects/:id                       - detail incl. stats, notes, activity_log
-// GET   /api/projects/:id?action=download_pdf   - serveert de opgeslagen PDF
-// PATCH /api/projects/:id                       - update editable fields (auto-logt wijzigingen)
-// PATCH /api/projects/:id  body { add_note:{ text } }     - voeg notitie toe
-// PATCH /api/projects/:id  body { delete_note:{ id } }    - verwijder notitie
-// PATCH /api/projects/:id  body { delete_pdf: true }      - verwijder opgeslagen PDF
+// GET   /api/projects/:id
+// GET   /api/projects/:id?action=download_pdf   - PDF download
+// PATCH /api/projects/:id                       - update (auto-logt wijzigingen)
+// PATCH /api/projects/:id  body { add_note }    - notitie toevoegen
+// PATCH /api/projects/:id  body { delete_note } - notitie verwijderen
+// PATCH /api/projects/:id  body { delete_pdf }  - PDF verwijderen
 import crypto from 'node:crypto';
 import { requireUser } from '../../../lib/auth.js';
 import {
@@ -48,7 +48,11 @@ function normalizeContacts(input) {
     const name = String(c.name || '').trim();
     const email = String(c.email || '').trim();
     if (!name && !email) continue;
-    out.push({ name, email });
+    out.push({
+      name,
+      email,
+      receives_threshold_mails: !!c.receives_threshold_mails,
+    });
   }
   return out;
 }
@@ -116,10 +120,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    if (req.query.action === 'download_pdf') {
-      await streamPdf(res, project.id);
-      return;
-    }
+    if (req.query.action === 'download_pdf') { await streamPdf(res, project.id); return; }
     res.status(200).json({ project: await buildDetail(project) });
     return;
   }
@@ -127,19 +128,13 @@ export default async function handler(req, res) {
   if (req.method === 'PATCH') {
     const b = req.body || {};
 
-    // ── Notitie toevoegen ────────────────────────────────────────
     if (b.add_note) {
       const text = String(b.add_note.text || '').trim();
-      if (!text) {
-        res.status(400).json({ error: 'Notitie mag niet leeg zijn' });
-        return;
-      }
+      if (!text) { res.status(400).json({ error: 'Notitie mag niet leeg zijn' }); return; }
       if (!Array.isArray(project.notes)) project.notes = [];
       const note = {
         id: 'n_' + crypto.randomBytes(6).toString('hex'),
-        text,
-        author_id: user.id,
-        author_name: user.name,
+        text, author_id: user.id, author_name: user.name,
         created_at: new Date().toISOString(),
       };
       project.notes.push(note);
@@ -149,15 +144,11 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── Notitie verwijderen ──────────────────────────────────────
     if (b.delete_note) {
       const id = String(b.delete_note.id || '');
       const notes = Array.isArray(project.notes) ? project.notes : [];
       const note = notes.find((n) => n.id === id);
-      if (!note) {
-        res.status(404).json({ error: 'Notitie niet gevonden' });
-        return;
-      }
+      if (!note) { res.status(404).json({ error: 'Notitie niet gevonden' }); return; }
       if (user.role !== 'admin' && note.author_id !== user.id) {
         res.status(403).json({ error: 'Alleen de auteur of een admin kan deze notitie verwijderen' });
         return;
@@ -169,7 +160,6 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── PDF verwijderen ──────────────────────────────────────────
     if (b.delete_pdf) {
       await deletePdfBlob(project.id);
       project.pdf_stored = false;
@@ -179,7 +169,6 @@ export default async function handler(req, res) {
       return;
     }
 
-    // ── Reguliere update met auto-activity-log ──────────────────
     const before = JSON.parse(JSON.stringify(project));
     for (const f of EDITABLE_FIELDS) {
       if (b[f] !== undefined) project[f] = b[f];

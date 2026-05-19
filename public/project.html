@@ -18,10 +18,7 @@
 
   const MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
-  let project;
-  let managers = [];
-  let clients = [];
-  let chartsRendered = false;
+  let project, managers = [], clients = [], chartsRendered = false;
 
   async function load() {
     const [r, s] = await Promise.all([
@@ -48,10 +45,11 @@
     const clientOptions = `<option value="">— Geen —</option>` + clients.map((c) =>
       `<option value="${c.id}" ${c.id === project.client_id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
     const canEditManager = me.role === 'admin';
-    const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '' }]).map((c) => `
+    const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '', receives_threshold_mails: false }]).map((c) => `
       <tr>
         <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
         <td><input type="email" data-contact="email" value="${escapeHtml(c.email || '')}"></td>
+        <td style="text-align:center"><input type="checkbox" data-contact="receives_threshold_mails" ${c.receives_threshold_mails ? 'checked' : ''} style="width:auto"></td>
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
       </tr>`).join('');
 
@@ -90,8 +88,7 @@
             <h3>Contactpersonen</h3>
             <ul style="margin:.25rem 0 0; padding-left:1.2rem">
               ${project.contacts.map((c) => `
-                <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}</li>
-              `).join('')}
+                <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
             </ul>` : ''}
         </div>
         <div class="card-static">
@@ -150,40 +147,22 @@
           <div class="form-row">
             <label>Beschikbare uren<input type="number" step="0.1" name="available_hours" value="${project.available_hours || 0}"></label>
             <label>Uurtarief (€)<input type="number" step="0.01" name="hourly_rate" value="${project.hourly_rate || 0}"></label>
-            <label>
-              <span class="lbl">Status</span>
-              <select name="status">${statusOptions}</select>
-            </label>
+            <label><span class="lbl">Status</span><select name="status">${statusOptions}</select></label>
           </div>
 
           <div class="form-row">
-            <label>
-              <span class="lbl">Module</span>
-              <select name="module">${moduleOptions}</select>
-            </label>
-            <label>
-              <span class="lbl">Klant</span>
-              <select name="client_id">${clientOptions}</select>
-            </label>
+            <label><span class="lbl">Module</span><select name="module">${moduleOptions}</select></label>
+            <label><span class="lbl">Klant</span><select name="client_id">${clientOptions}</select></label>
             <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
               <input type="checkbox" name="is_poc" style="width:auto" ${project.is_poc ? 'checked' : ''}> Dit is een POC
             </label>
           </div>
 
           <div class="form-row">
-            <label>
-              <span class="lbl">Startdatum</span>
-              <input type="date" name="start_date" value="${escapeHtml(project.start_date || '')}">
-            </label>
-            <label>
-              <span class="lbl">Deadline</span>
-              <input type="date" name="deadline" value="${escapeHtml(project.deadline || '')}">
-            </label>
+            <label><span class="lbl">Startdatum</span><input type="date" name="start_date" value="${escapeHtml(project.start_date || '')}"></label>
+            <label><span class="lbl">Deadline</span><input type="date" name="deadline" value="${escapeHtml(project.deadline || '')}"></label>
             ${canEditManager ? `
-              <label>
-                <span class="lbl">Projectmanager</span>
-                <select name="manager_id">${managerOptions}</select>
-              </label>` : '<label></label>'}
+              <label><span class="lbl">Projectmanager</span><select name="manager_id">${managerOptions}</select></label>` : '<label></label>'}
           </div>
 
           <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
@@ -194,8 +173,12 @@
           </label>
 
           <h4>Contactpersonen bij de klant</h4>
+          <p class="subtle" style="margin-top:-.4rem; font-size:.85rem">Vink "Ontvangt urenverbruik-mails" aan om deze contact óók de drempel-mails te laten ontvangen.</p>
           <table class="table">
-            <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+            <thead><tr>
+              <th>Naam</th><th>E-mailadres</th>
+              <th style="text-align:center">Ontvangt urenverbruik-mails</th><th></th>
+            </tr></thead>
             <tbody id="contactsBody">${contactRows}</tbody>
           </table>
           <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
@@ -211,12 +194,11 @@
       </div>
 
       ${(project.team_stats && project.team_stats.length) ? `
-        <h2>Uren per teamlid (op dit project)</h2>
+        <h2>Uren per teamlid</h2>
         <table class="table">
           <thead><tr><th>Medewerker</th><th>Uren</th></tr></thead>
           <tbody>
-            ${project.team_stats.map((m) => `
-              <tr><td>${escapeHtml(m.name)}</td><td>${(Number(m.hours) || 0).toFixed(1)}</td></tr>`).join('')}
+            ${project.team_stats.map((m) => `<tr><td>${escapeHtml(m.name)}</td><td>${(Number(m.hours) || 0).toFixed(1)}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
 
@@ -225,8 +207,7 @@
         <table class="table">
           <thead><tr><th>Fase</th><th>Beschrijving</th><th>Uren</th></tr></thead>
           <tbody>
-            ${project.phases.map((p) => `
-              <tr><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.description || '')}</td><td>${(Number(p.hours) || 0).toFixed(1)}</td></tr>`).join('')}
+            ${project.phases.map((p) => `<tr><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.description || '')}</td><td>${(Number(p.hours) || 0).toFixed(1)}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
 
@@ -250,7 +231,6 @@
       </div>
     `;
 
-    // Hernoem button — inline rename
     document.getElementById('renameBtn').onclick = async () => {
       const newName = prompt('Nieuwe projectnaam:', project.name);
       if (newName === null) return;
@@ -272,7 +252,6 @@
       } catch (err) { toast(err.message, 'error'); }
     };
 
-    // Notitie toevoegen
     document.getElementById('noteForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const text = e.target.elements.text.value.trim();
@@ -295,7 +274,6 @@
       };
     }
 
-    // PDF upload (re-upload op bestaand project)
     document.getElementById('pdfUploadForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const file = e.target.querySelector('input[name=pdf]').files[0];
@@ -310,7 +288,6 @@
       } catch (err) { toast(err.message, 'error'); }
     });
 
-    // Team
     const teamGrid = document.getElementById('teamGrid');
     apiGet('/api/moneybird/employees').then(({ employees }) => {
       const checkedIds = new Set((project.team || []).map((t) => t.moneybird_user_id));
@@ -325,14 +302,13 @@
         </label>`).join('');
     }).catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
 
-    // Contacten
     function bindContactRow(tr) {
       const removeBtn = tr.querySelector('[data-remove]');
       if (removeBtn) {
         removeBtn.onclick = () => {
           const tbody = document.getElementById('contactsBody');
           if (tbody.children.length > 1) tr.remove();
-          else tr.querySelectorAll('input').forEach((i) => (i.value = ''));
+          else tr.querySelectorAll('input').forEach((i) => { if (i.type === 'checkbox') i.checked = false; else i.value = ''; });
         };
       }
     }
@@ -343,12 +319,12 @@
       tr.innerHTML = `
         <td><input type="text" data-contact="name"></td>
         <td><input type="email" data-contact="email"></td>
+        <td style="text-align:center"><input type="checkbox" data-contact="receives_threshold_mails" style="width:auto"></td>
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
       tbody.appendChild(tr);
       bindContactRow(tr);
     };
 
-    // Edit form
     document.getElementById('editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -358,8 +334,9 @@
       for (const tr of document.querySelectorAll('#contactsBody tr')) {
         const name = tr.querySelector('[data-contact=name]').value.trim();
         const email = tr.querySelector('[data-contact=email]').value.trim();
+        const receives = tr.querySelector('[data-contact=receives_threshold_mails]').checked;
         if (!name && !email) continue;
-        contacts.push({ name, email });
+        contacts.push({ name, email, receives_threshold_mails: receives });
       }
       const body = {
         description: f.get('description'),
@@ -384,7 +361,6 @@
       } catch (err) { toast(err.message, 'error'); }
     });
 
-    // PDF verwijderen
     const delPdfBtn = document.getElementById('deletePdfBtn');
     if (delPdfBtn) {
       delPdfBtn.onclick = async () => {
@@ -400,29 +376,17 @@
     if (!chartsRendered) {
       chartsRendered = true;
       apiGet(`/api/projects/${encodeURIComponent(id)}/hours?type=over-time`).then((d) => {
-        const ctx = document.getElementById('hoursOverTime');
-        if (!ctx) return;
+        const ctx = document.getElementById('hoursOverTime'); if (!ctx) return;
         const datasets = [
           { label: 'Uren per dag', data: d.daily, backgroundColor: 'rgba(99,102,241,0.4)', borderColor: '#6366f1', type: 'bar' },
           { label: 'Cumulatief', data: d.cumulative, borderColor: '#0ea5e9', backgroundColor: 'rgba(14,165,233,0.1)', fill: true, type: 'line', tension: .3 },
         ];
-        if (d.available > 0) {
-          datasets.push({
-            label: 'Beschikbaar (max)', data: d.labels.map(() => d.available),
-            borderColor: '#ef4444', borderDash: [6, 6], pointRadius: 0, type: 'line', fill: false,
-          });
-        }
+        if (d.available > 0) datasets.push({ label: 'Beschikbaar (max)', data: d.labels.map(() => d.available), borderColor: '#ef4444', borderDash: [6, 6], pointRadius: 0, type: 'line', fill: false });
         new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets }, options: { responsive: true, interaction: { mode: 'index' } } });
       });
-
       apiGet(`/api/projects/${encodeURIComponent(id)}/hours?type=per-user`).then((d) => {
-        const ctx = document.getElementById('hoursPerUser');
-        if (!ctx) return;
-        new Chart(ctx, {
-          type: 'bar',
-          data: { labels: d.labels, datasets: [{ label: 'Uren', data: d.hours, backgroundColor: '#6366f1' }] },
-          options: { indexAxis: 'y', responsive: true },
-        });
+        const ctx = document.getElementById('hoursPerUser'); if (!ctx) return;
+        new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets: [{ label: 'Uren', data: d.hours, backgroundColor: '#6366f1' }] }, options: { indexAxis: 'y', responsive: true } });
       });
     }
   }

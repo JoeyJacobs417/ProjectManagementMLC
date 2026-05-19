@@ -1,9 +1,10 @@
 // PATCH /api/admin/users/:id
-//   body: { action: "toggle" }              - activeer/deactiveer
-//   body: { action: "reset", password }     - reset wachtwoord
-//   body: { action: "rename", name }        - hernoem
-import { requireAdmin, hashPassword } from '../../../lib/auth.js';
-import { getUserById, saveUser } from '../../../lib/db.js';
+//   { action: "toggle" }                  - activeer/deactiveer
+//   { action: "reset", password }         - wachtwoord resetten
+//   { action: "rename", name }             - naam wijzigen
+//   { action: "change_role", role }        - rol wijzigen (admin <-> projectmanager)
+import { requireAdmin, hashPassword, ROLE_ADMIN, ROLE_PM } from '../../../lib/auth.js';
+import { getUserById, saveUser, listUsers } from '../../../lib/db.js';
 
 export default async function handler(req, res) {
   const admin = await requireAdmin(req, res);
@@ -17,7 +18,7 @@ export default async function handler(req, res) {
     res.status(404).json({ error: 'Niet gevonden' });
     return;
   }
-  const { action, password, name } = req.body || {};
+  const { action, password, name, role } = req.body || {};
 
   if (action === 'toggle') {
     if (user.id === admin.id) {
@@ -50,6 +51,39 @@ export default async function handler(req, res) {
     user.name = newName;
     await saveUser(user);
     res.status(200).json({ ok: true, name: user.name });
+    return;
+  }
+
+  if (action === 'change_role') {
+    const newRole = String(role || '').trim();
+    if (newRole !== ROLE_ADMIN && newRole !== ROLE_PM) {
+      res.status(400).json({ error: 'Ongeldige rol' });
+      return;
+    }
+    if (user.role === newRole) {
+      res.status(200).json({ ok: true, role: user.role, unchanged: true });
+      return;
+    }
+    // Veiligheidscheck: minstens één actieve admin moeten blijven
+    if (user.role === ROLE_ADMIN && newRole === ROLE_PM) {
+      const all = await listUsers();
+      const otherActiveAdmins = all.filter(
+        (u) => u.id !== user.id && u.role === ROLE_ADMIN && u.active
+      );
+      if (otherActiveAdmins.length === 0) {
+        res.status(400).json({
+          error: 'Deze gebruiker is de enige actieve admin — maak eerst iemand anders admin.',
+        });
+        return;
+      }
+      if (user.id === admin.id) {
+        res.status(400).json({ error: 'Je kunt jezelf niet downgraden naar projectmanager' });
+        return;
+      }
+    }
+    user.role = newRole;
+    await saveUser(user);
+    res.status(200).json({ ok: true, role: user.role });
     return;
   }
 

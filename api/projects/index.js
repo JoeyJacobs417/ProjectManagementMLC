@@ -1,6 +1,6 @@
 // GET /api/projects                    -> lijst projecten
 // GET /api/projects?format=xlsx        -> Excel-export
-// POST /api/projects                   -> nieuw project (verplicht: moneybird_project_id)
+// POST /api/projects                   -> nieuw project
 import { Redis } from '@upstash/redis';
 import * as XLSX from 'xlsx';
 import { requireUser } from '../../lib/auth.js';
@@ -44,7 +44,7 @@ function normalizeContacts(input) {
     const name = String(c.name || '').trim();
     const email = String(c.email || '').trim();
     if (!name && !email) continue;
-    out.push({ name, email });
+    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails });
   }
   return out;
 }
@@ -83,7 +83,7 @@ async function withStats(project) {
     percentage_used: pct,
     within_budget: avail > 0 ? hoursUsed <= avail : null,
     has_pdf: !!project.pdf_stored,
-    time_entries: entries, // alleen gebruikt door planning-pagina voor weekly view
+    time_entries: entries,
   };
 }
 
@@ -108,7 +108,7 @@ function buildExcel(enrichedProjects, clientsById) {
     'Uurtarief (€)': Number(p.hourly_rate) || 0,
     'Begrote omzet (€)': Math.round(((Number(p.available_hours) || 0) * (Number(p.hourly_rate) || 0)) * 100) / 100,
     'Team': (p.team || []).map((t) => t.name).join(', '),
-    'Contacten': (p.contacts || []).map((c) => `${c.name}${c.email ? ' <' + c.email + '>' : ''}`).join('; '),
+    'Contacten': (p.contacts || []).map((c) => `${c.name}${c.email ? ' <' + c.email + '>' : ''}${c.receives_threshold_mails ? ' [alerts]' : ''}`).join('; '),
     'Feature requests': p.feature_requests || '',
     'Moneybird ID': p.moneybird_project_id || '',
     'Aangemaakt': p.created_at || '',

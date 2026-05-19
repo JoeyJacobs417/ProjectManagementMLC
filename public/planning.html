@@ -3,11 +3,15 @@
 <meta charset="utf-8"><title>Planning — Projectmanager</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head><body>
 <header class="topbar" id="topbar"></header>
 <main class="container">
-  <h1>Planning</h1>
-  <p class="subtle">Per medewerker: actieve projecten, resterende uren, vakantie, weekoverzicht en geschatte einddatum.</p>
+  <div class="page-header">
+    <h1>Planning</h1>
+    <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
+  </div>
+  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
@@ -25,7 +29,9 @@
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel } from '/app.js';
   const me = await renderTopbar('/planning.html');
 
-  // Time entries meeladen voor weekly view
+  // Filter: alleen in_progress / on_hold / future
+  const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
+
   const [{ projects }, { settings }] = await Promise.all([
     apiGet('/api/projects?with_time_entries=1'),
     apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
@@ -34,24 +40,28 @@
   const vacationsByEmp = settings.employee_vacations || {};
   const isAdmin = me?.role === 'admin';
 
-  // ── Datum-helpers ─────────────────────────────────────────────
-  function todayIso() {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.toISOString().slice(0, 10);
+  // Time entries van Moneybird (laatste 6 weken) voor "Overig"
+  const WEEKS_BACK = 4;
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - (WEEKS_BACK + 2) * 7);
+  const sinceIso = sinceDate.toISOString().slice(0, 10);
+  let allMoneybirdEntries = [];
+  try {
+    const r = await apiGet(`/api/moneybird/time_entries?since=${sinceIso}`);
+    allMoneybirdEntries = r.time_entries || [];
+  } catch {
+    // Niet kritiek — zonder dit werkt de pagina ook, alleen geen "Overig"
   }
-  function isoToDate(iso) {
-    const [y, m, d] = iso.split('-').map(Number);
-    return new Date(y, m - 1, d);
-  }
-  function dateToIso(d) {
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  }
-  function fmtDate(iso) {
-    if (!iso) return '';
-    const [y, m, d] = iso.split('-');
-    return `${d}-${m}-${y}`;
-  }
+  // Set van tracked Moneybird-project-IDs (= projecten in onze app)
+  const trackedMoneybirdIds = new Set(
+    projects.map((p) => p.moneybird_project_id).filter(Boolean).map(String)
+  );
+
+  // ── Datum/vakantie helpers ─────────────────────────────────────
+  function todayIso() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
+  function isoToDate(iso) { const [y,m,d]=iso.split('-').map(Number); return new Date(y,m-1,d); }
+  function dateToIso(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+  function fmtDate(iso) { if (!iso) return ''; const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
   function fmtDateShort(iso) {
     if (!iso) return '';
     const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
@@ -59,18 +69,14 @@
     return `${Number(d)} ${months[Number(m)-1]}`;
   }
   function isWeekend(d) { return d.getDay() === 0 || d.getDay() === 6; }
-  function isOnVacation(iso, periods) {
-    return (periods || []).some((p) => p.start <= iso && iso <= p.end);
-  }
+  function isOnVacation(iso, periods) { return (periods || []).some((p) => p.start <= iso && iso <= p.end); }
   function mondayOf(date) {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
     const dow = d.getDay();
-    const diff = dow === 0 ? -6 : 1 - dow; // ma=1
+    const diff = dow === 0 ? -6 : 1 - dow;
     d.setDate(d.getDate() + diff);
     return d;
   }
-
   function vacationDaysInRange(periods, startIso, endIso) {
     if (!periods || periods.length === 0) return 0;
     let count = 0;
@@ -78,25 +84,18 @@
       const s = p.start > startIso ? p.start : startIso;
       const e = p.end < endIso ? p.end : endIso;
       if (s > e) continue;
-      let d = isoToDate(s);
-      const end = isoToDate(e);
-      while (d <= end) {
-        if (!isWeekend(d)) count++;
-        d.setDate(d.getDate() + 1);
-      }
+      let d = isoToDate(s); const end = isoToDate(e);
+      while (d <= end) { if (!isWeekend(d)) count++; d.setDate(d.getDate() + 1); }
     }
     return count;
   }
-
   function estimateCompletionDate(remainingHours, capacityPerWeek, periods) {
     if (!capacityPerWeek || capacityPerWeek <= 0) return null;
     const dailyHours = capacityPerWeek / 5;
     const workDaysNeeded = Math.ceil(remainingHours / dailyHours);
     if (workDaysNeeded === 0) return new Date();
-    let d = new Date();
-    d.setHours(0, 0, 0, 0);
-    let worked = 0;
-    let safety = 365 * 5;
+    let d = new Date(); d.setHours(0, 0, 0, 0);
+    let worked = 0; let safety = 365 * 5;
     while (worked < workDaysNeeded && safety-- > 0) {
       const iso = dateToIso(d);
       if (!isWeekend(d) && !isOnVacation(iso, periods)) {
@@ -108,10 +107,10 @@
     return null;
   }
 
-  // ── Groepeer projecten per medewerker ─────────────────────────
+  // ── Groepeer projecten per medewerker (alleen relevante statuses) ─
   const byEmp = new Map();
   for (const p of projects) {
-    if (p.status === 'done') continue;
+    if (!PLANNING_STATUSES.has(p.status)) continue;
     for (const t of (p.team || [])) {
       const key = t.moneybird_user_id;
       if (!byEmp.has(key)) {
@@ -129,7 +128,6 @@
   }
   const employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
 
-  // ── Filter dropdown vullen ────────────────────────────────────
   const empFilter = document.getElementById('empFilter');
   for (const e of employees) {
     const o = document.createElement('option');
@@ -139,13 +137,9 @@
   const STORAGE_KEY = 'pm_planning_emp_filter';
   empFilter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
 
-  // ── Weekly hours per medewerker ────────────────────────────────
-  // Voor laatste N weken: per (empId, weekStartIso, projectId) -> hours
-  const WEEKS_BACK = 4;
+  // ── Weekly breakdown ───────────────────────────────────────────
   function buildWeeklyForEmployee(empId) {
-    // verzamel time entries van deze persoon, gegroepeerd per (weekStart, projectId)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0,0,0,0);
     const thisMonday = mondayOf(today);
     const weekStarts = [];
     for (let i = WEEKS_BACK - 1; i >= 0; i--) {
@@ -153,29 +147,48 @@
       d.setDate(d.getDate() - 7 * i);
       weekStarts.push(dateToIso(d));
     }
-    // map: weekIso -> Map<projectId, hours>
-    const weekMap = new Map(weekStarts.map((w) => [w, new Map()]));
+    // map: weekIso -> { perTracked: Map<projectId, hours>, otherEntries: [{project_name, hours}] }
+    const weekMap = new Map(weekStarts.map((w) => [w, { perTracked: new Map(), other: new Map(), otherTotal: 0 }]));
+
+    // Tracked: uit /api/projects time_entries
     for (const p of projects) {
-      const entries = p.time_entries || [];
-      for (const e of entries) {
+      for (const e of (p.time_entries || [])) {
         if (e.user_moneybird_id !== empId || !e.started_at) continue;
-        const entryDate = new Date(String(e.started_at).slice(0, 10));
-        const monday = dateToIso(mondayOf(entryDate));
+        const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0,10))));
         if (!weekMap.has(monday)) continue;
-        const projMap = weekMap.get(monday);
-        projMap.set(p.id, (projMap.get(p.id) || 0) + (Number(e.hours) || 0));
+        const cur = weekMap.get(monday).perTracked;
+        cur.set(p.id, (cur.get(p.id) || 0) + (Number(e.hours) || 0));
       }
     }
-    return weekStarts.map((w) => ({
-      weekStart: w,
-      perProject: Array.from(weekMap.get(w).entries())
-        .map(([pid, hours]) => {
-          const pr = projects.find((x) => x.id === pid);
-          return { project_id: pid, project_name: pr ? pr.name : 'Onbekend', hours };
-        })
-        .sort((a, b) => b.hours - a.hours),
-      total: Array.from(weekMap.get(w).values()).reduce((a, h) => a + h, 0),
-    }));
+    // Overig: uit Moneybird (entries die NIET op een tracked project zitten)
+    for (const e of allMoneybirdEntries) {
+      if (e.user_moneybird_id !== empId || !e.started_at) continue;
+      if (e.moneybird_project_id && trackedMoneybirdIds.has(String(e.moneybird_project_id))) continue;
+      const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0,10))));
+      if (!weekMap.has(monday)) continue;
+      const bucket = weekMap.get(monday).other;
+      const mbName = e.moneybird_project_name || '(geen project)';
+      bucket.set(mbName, (bucket.get(mbName) || 0) + (Number(e.hours) || 0));
+      weekMap.get(monday).otherTotal += (Number(e.hours) || 0);
+    }
+
+    return weekStarts.map((w) => {
+      const wd = weekMap.get(w);
+      return {
+        weekStart: w,
+        perProject: Array.from(wd.perTracked.entries())
+          .map(([pid, hours]) => {
+            const pr = projects.find((x) => x.id === pid);
+            return { project_id: pid, project_name: pr ? pr.name : 'Onbekend', hours };
+          })
+          .sort((a, b) => b.hours - a.hours),
+        otherDist: Array.from(wd.other.entries())
+          .map(([name, hours]) => ({ project_name: name, hours }))
+          .sort((a, b) => b.hours - a.hours),
+        otherTotal: wd.otherTotal,
+        total: Array.from(wd.perTracked.values()).reduce((a, h) => a + h, 0) + wd.otherTotal,
+      };
+    });
   }
 
   // ── Render ────────────────────────────────────────────────────
@@ -209,9 +222,7 @@
           const completionIso = dateToIso(completion);
           const vacationDays = vacationDaysInRange(upcoming, today, completionIso);
           estimateHtml = `${baseWeeks} weken werk · verwacht klaar <strong>${fmtDate(completionIso)}</strong>${vacationDays > 0 ? ` (incl. ${vacationDays} ${vacationDays === 1 ? 'vakantiedag' : 'vakantiedagen'})` : ''}`;
-        } else {
-          estimateHtml = `${baseWeeks} weken werk`;
-        }
+        } else { estimateHtml = `${baseWeeks} weken werk`; }
       } else if (e.totalRemaining === 0) {
         estimateHtml = '<span class="subtle">niets meer te doen</span>';
       }
@@ -224,34 +235,47 @@
               ${isAdmin ? `<a href="#" data-remove-vac="${e.id}|${i}" style="margin-left:.5rem; color:inherit; text-decoration:none">×</a>` : ''}
             </span>`).join('');
 
-      // Weekly breakdown
       const weeks = buildWeeklyForEmployee(e.id);
+      const weeklyRows = weeks.map((w, wIdx) => {
+        const dist = w.perProject.length === 0
+          ? '<span class="subtle">geen uren</span>'
+          : w.perProject.map((pp) => `<span class="badge badge-gray" style="margin-right:.25rem; display:inline-block; margin-bottom:.2rem">${escapeHtml(pp.project_name)}: ${pp.hours.toFixed(1)}u</span>`).join('');
+        const overigBadge = w.otherTotal > 0
+          ? `<a href="#" class="badge" style="background:rgba(139,92,246,.12);color:#6d28d9;text-decoration:none;cursor:pointer" data-toggle-overig="${e.id}|${wIdx}">Overig: ${w.otherTotal.toFixed(1)}u ▾</a>`
+          : '';
+        const overigPanel = w.otherTotal > 0
+          ? `<tr class="hidden" data-overig-panel="${e.id}|${wIdx}">
+              <td colspan="4" style="background:var(--bg-soft); padding:.75rem 1rem">
+                <strong>Overig — uren in Moneybird die niet op een toegewezen project zijn geschreven:</strong>
+                <ul style="margin:.4rem 0 0; padding-left:1.2rem">
+                  ${w.otherDist.map((od) => `<li>${escapeHtml(od.project_name)}: <strong>${od.hours.toFixed(1)}u</strong></li>`).join('')}
+                </ul>
+              </td>
+            </tr>`
+          : '';
+        const capCmp = cap > 0
+          ? `<span class="badge ${w.total >= cap ? 'badge-green' : w.total >= cap * 0.6 ? 'badge-orange' : 'badge-red'}">${w.total.toFixed(1)} / ${cap}u</span>`
+          : '<span class="subtle">—</span>';
+        return `
+          <tr>
+            <td>${fmtDateShort(w.weekStart)}</td>
+            <td>${dist}${overigBadge ? ' ' + overigBadge : ''}</td>
+            <td><strong>${w.total.toFixed(1)}u</strong></td>
+            <td>${capCmp}</td>
+          </tr>
+          ${overigPanel}`;
+      }).join('');
+
       const weeklyHtml = `
         <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
         <table class="table" style="margin:0">
           <thead><tr>
             <th>Week (ma)</th>
-            <th>Projecten waar uren geschreven zijn</th>
+            <th>Projecten</th>
             <th>Totaal</th>
             <th>vs. capaciteit</th>
           </tr></thead>
-          <tbody>
-            ${weeks.map((w) => {
-              const dist = w.perProject.length === 0
-                ? '<span class="subtle">geen uren</span>'
-                : w.perProject.map((pp) => `<span class="badge badge-gray" style="margin-right:.25rem">${escapeHtml(pp.project_name)}: ${pp.hours.toFixed(1)}u</span>`).join('');
-              const capCmp = cap > 0
-                ? `<span class="badge ${w.total >= cap ? 'badge-green' : w.total >= cap * 0.6 ? 'badge-orange' : 'badge-red'}">${w.total.toFixed(1)} / ${cap}u</span>`
-                : '<span class="subtle">—</span>';
-              return `
-                <tr>
-                  <td>${fmtDateShort(w.weekStart)}</td>
-                  <td>${dist}</td>
-                  <td><strong>${w.total.toFixed(1)}u</strong></td>
-                  <td>${capCmp}</td>
-                </tr>`;
-            }).join('')}
-          </tbody>
+          <tbody>${weeklyRows}</tbody>
         </table>`;
 
       return `
@@ -288,15 +312,11 @@
               </div>` : ''}
           </div>
 
-          <h4 style="margin-top:1rem">Toegewezen projecten</h4>
+          <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold)</h4>
           <table class="table" style="margin:0">
             <thead><tr>
-              <th>Project</th>
-              <th>Module</th>
-              <th>Status</th>
-              <th>Uren door ${escapeHtml(e.name)}</th>
-              <th>Resterend</th>
-              <th>Totaal</th>
+              <th>Project</th><th>Module</th><th>Status</th>
+              <th>Uren door ${escapeHtml(e.name)}</th><th>Resterend</th><th>Totaal</th>
             </tr></thead>
             <tbody>
               ${rows.map((row) => {
@@ -321,7 +341,13 @@
     for (const tr of c.querySelectorAll('tr.clickable')) {
       tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
     }
-
+    for (const link of c.querySelectorAll('a[data-toggle-overig]')) {
+      link.onclick = (ev) => {
+        ev.preventDefault();
+        const panel = c.querySelector(`tr[data-overig-panel="${link.dataset.toggleOverig}"]`);
+        if (panel) panel.classList.toggle('hidden');
+      };
+    }
     for (const btn of c.querySelectorAll('button[data-add-vac]')) {
       btn.onclick = async () => {
         const empId = btn.dataset.addVac;
@@ -333,14 +359,12 @@
         await saveVacations(empId, [...(vacationsByEmp[empId] || []), { start, end, label }]);
       };
     }
-
     for (const link of c.querySelectorAll('a[data-remove-vac]')) {
       link.onclick = async (ev) => {
         ev.preventDefault();
         const [empId, idx] = link.dataset.removeVac.split('|');
         const cur = vacationsByEmp[empId] || [];
-        const next = cur.filter((_, i) => i !== Number(idx));
-        await saveVacations(empId, next);
+        await saveVacations(empId, cur.filter((_, i) => i !== Number(idx)));
       };
     }
   }
@@ -351,9 +375,7 @@
     try {
       await apiSend('/api/admin/settings', 'POST', { employee_vacations: next });
       Object.assign(vacationsByEmp, next);
-      for (const k of Object.keys(vacationsByEmp)) {
-        if (!(k in next)) delete vacationsByEmp[k];
-      }
+      for (const k of Object.keys(vacationsByEmp)) { if (!(k in next)) delete vacationsByEmp[k]; }
       toast('Vakantie opgeslagen', 'success');
       render();
     } catch (err) { toast(err.message, 'error'); }
@@ -361,9 +383,86 @@
 
   empFilter.addEventListener('change', render);
 
+  // ── Excel export ──────────────────────────────────────────────
+  document.getElementById('exportBtn').onclick = () => {
+    if (typeof XLSX === 'undefined') { toast('Excel-library niet geladen', 'error'); return; }
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: per medewerker overzicht
+    const sumRows = employees.map((e) => {
+      const cap = Number(capacities[e.id]) || 0;
+      const periods = vacationsByEmp[e.id] || [];
+      const upcoming = periods.filter((p) => p.end >= todayIso());
+      let estCompletion = '';
+      if (cap > 0 && e.totalRemaining > 0) {
+        const cd = estimateCompletionDate(e.totalRemaining, cap, upcoming);
+        if (cd) estCompletion = dateToIso(cd);
+      }
+      return {
+        'Medewerker': e.name,
+        'Aantal projecten': e.rows.length,
+        'Uren resterend totaal': Math.round(e.totalRemaining * 10) / 10,
+        'Capaciteit (u/wk)': cap || '',
+        'Verwacht klaar': estCompletion,
+        'Geplande vakantie': upcoming.map((p) => `${p.start} t/m ${p.end}${p.label ? ' (' + p.label + ')' : ''}`).join('; '),
+      };
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sumRows), 'Per medewerker');
+
+    // Sheet 2: per (medewerker, project) toewijzing
+    const assignRows = [];
+    for (const e of employees) {
+      for (const r of e.rows) {
+        const p = r.project;
+        assignRows.push({
+          'Medewerker': e.name,
+          'Project': p.name,
+          'Module': p.module || '',
+          'Status': statusLabel(p.status),
+          'POC': p.is_poc ? 'Ja' : '',
+          'Deadline': p.deadline || '',
+          'Uren door persoon': Math.round(r.ownHours * 10) / 10,
+          'Resterend op project': Math.round(r.remaining * 10) / 10,
+          'Totaal beschikbaar': Number(p.available_hours) || 0,
+        });
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(assignRows), 'Toewijzingen');
+
+    // Sheet 3: weekly breakdown per (medewerker, week, project + overig)
+    const weeklyRows = [];
+    for (const e of employees) {
+      const weeks = buildWeeklyForEmployee(e.id);
+      for (const w of weeks) {
+        for (const pp of w.perProject) {
+          weeklyRows.push({
+            'Medewerker': e.name,
+            'Week (ma)': w.weekStart,
+            'Project': pp.project_name,
+            'Bron': 'toegewezen',
+            'Uren': Math.round(pp.hours * 10) / 10,
+          });
+        }
+        for (const od of w.otherDist) {
+          weeklyRows.push({
+            'Medewerker': e.name,
+            'Week (ma)': w.weekStart,
+            'Project': od.project_name,
+            'Bron': 'overig (Moneybird)',
+            'Uren': Math.round(od.hours * 10) / 10,
+          });
+        }
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly');
+
+    XLSX.writeFile(wb, `planning-${new Date().toISOString().slice(0,10)}.xlsx`);
+    toast('Excel gedownload', 'success');
+  };
+
   if (employees.length === 0) {
     document.getElementById('content').innerHTML =
-      `<p class="subtle">Er zijn nog geen medewerkers toegewezen aan projecten. Wijs medewerkers toe via de project-detail pagina.</p>`;
+      `<p class="subtle">Geen actieve medewerkers met toegewezen projecten in status "In progress", "Future" of "On hold".</p>`;
   } else {
     render();
   }
