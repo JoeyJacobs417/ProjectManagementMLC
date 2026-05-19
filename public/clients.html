@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Klanten — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div class="page-header">
+    <h1>Klanten</h1>
+    <span class="subtle" id="countLabel"></span>
+  </div>
+  <p class="subtle">Overzicht van klanten met hun projecten en totale urenstatus.</p>
+
+  <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
+    <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
+      🔍 <input type="search" id="searchInput" placeholder="Zoek klant of contactpersoon" style="flex:1">
+    </label>
+  </div>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
+  const me = await renderTopbar('/clients.html');
+
+  const [{ projects }, { settings }] = await Promise.all([
+    apiGet('/api/projects'),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
+  ]);
+  const clients = settings.clients || [];
+
+  // Aggregeer per klant
+  const byClient = new Map();
+  for (const c of clients) {
+    byClient.set(c.id, { client: c, projects: [], totalAvailable: 0, totalUsed: 0 });
+  }
+  for (const p of projects) {
+    if (!p.client_id || !byClient.has(p.client_id)) continue;
+    const rec = byClient.get(p.client_id);
+    rec.projects.push(p);
+    rec.totalAvailable += Number(p.available_hours) || 0;
+    rec.totalUsed += Number(p.hours_used) || 0;
+  }
+  const list = Array.from(byClient.values()).sort((a, b) => a.client.name.localeCompare(b.client.name));
+
+  const search = document.getElementById('searchInput');
+  const STORAGE_KEY = 'pm_clients_query';
+  search.value = sessionStorage.getItem(STORAGE_KEY) || '';
+
+  function render() {
+    const q = search.value.trim().toLowerCase();
+    sessionStorage.setItem(STORAGE_KEY, q);
+
+    const matches = q
+      ? list.filter(({ client }) => {
+          const hay = [client.name, ...(client.contacts || []).map((c) => `${c.name} ${c.email}`)].join(' ').toLowerCase();
+          return q.split(/\s+/).filter(Boolean).every((t) => hay.includes(t));
+        })
+      : list;
+
+    document.getElementById('countLabel').textContent = `${matches.length} van ${list.length} klanten`;
+
+    const c = document.getElementById('content');
+    if (list.length === 0) {
+      c.innerHTML = `<p class="subtle">Nog geen klanten. <a href="/admin-settings.html">Voeg klanten toe in Instellingen</a>.</p>`;
+      return;
+    }
+    if (matches.length === 0) {
+      c.innerHTML = '<p class="subtle">Geen klanten gevonden voor deze zoekopdracht.</p>';
+      return;
+    }
+    c.innerHTML = matches.map(({ client, projects, totalAvailable, totalUsed }) => {
+      const pct = totalAvailable > 0 ? Math.round((totalUsed / totalAvailable) * 1000) / 10 : 0;
+      return `
+        <div class="card-static" style="margin-bottom:1rem">
+          <div class="card-header">
+            <div>
+              <h2 style="margin:0">${escapeHtml(client.name)}</h2>
+              <p class="subtle" style="margin:.25rem 0">${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}</p>
+            </div>
+            <div class="subtle" style="text-align:right">
+              <div><strong>${totalUsed.toFixed(1)}</strong> / ${totalAvailable.toFixed(1)} uur</div>
+              ${totalAvailable > 0 ? `<div><span class="badge ${percentageBadgeClass(pct)}">${pct}%</span></div>` : ''}
+            </div>
+          </div>
+
+          ${(client.contacts && client.contacts.length) ? `
+            <div style="margin-top:.5rem">
+              <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em">Contactpersonen</div>
+              <ul style="margin:.25rem 0 0; padding-left:1.2rem">
+                ${client.contacts.map((cc) => `<li>${escapeHtml(cc.name || '')}${cc.email ? ` — <a href="mailto:${escapeHtml(cc.email)}">${escapeHtml(cc.email)}</a>` : ''}</li>`).join('')}
+              </ul>
+            </div>` : ''}
+
+          ${projects.length > 0 ? `
+            <table class="table" style="margin-top:.75rem">
+              <thead><tr><th>Project</th><th>Status</th><th>Uren</th><th>%</th></tr></thead>
+              <tbody>
+                ${projects.map((p) => `
+                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                    <td><strong>${escapeHtml(p.name)}</strong></td>
+                    <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+                    <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
+                    <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>` : '<p class="subtle" style="margin-top:.5rem">Geen gekoppelde projecten.</p>'}
+        </div>`;
+    }).join('');
+
+    for (const tr of c.querySelectorAll('tr.clickable')) {
+      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    }
+  }
+
+  search.addEventListener('input', render);
+  render();
+</script>
+</body></html>

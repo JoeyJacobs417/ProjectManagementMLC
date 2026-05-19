@@ -10,7 +10,7 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, statusLabel } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, statusLabel, deadlineBadge, fmtDate, activityDescription } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   const id = new URLSearchParams(location.search).get('id');
@@ -20,11 +20,16 @@
 
   let project;
   let managers = [];
+  let clients = [];
   let chartsRendered = false;
 
   async function load() {
-    const r = await apiGet(`/api/projects/${encodeURIComponent(id)}`);
+    const [r, s] = await Promise.all([
+      apiGet(`/api/projects/${encodeURIComponent(id)}`),
+      apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
+    ]);
     project = r.project;
+    clients = s.settings.clients || [];
     if (me.role === 'admin' && managers.length === 0) {
       const u = await apiGet('/api/admin/users').catch(() => ({ users: [] }));
       managers = (u.users || []).filter((x) => x.active);
@@ -35,14 +40,13 @@
   function render() {
     const c = document.getElementById('content');
     const statusOptions = STATUS_OPTIONS.map((o) =>
-      `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`
-    ).join('');
+      `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`).join('');
     const moduleOptions = `<option value="">— Kies module —</option>` + MODULES.map((m) =>
-      `<option value="${m}" ${m === project.module ? 'selected' : ''}>${m}</option>`
-    ).join('');
+      `<option value="${m}" ${m === project.module ? 'selected' : ''}>${m}</option>`).join('');
     const managerOptions = `<option value="">— Geen —</option>` + managers.map((m) =>
-      `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`
-    ).join('');
+      `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`).join('');
+    const clientOptions = `<option value="">— Geen —</option>` + clients.map((c) =>
+      `<option value="${c.id}" ${c.id === project.client_id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
     const canEditManager = me.role === 'admin';
     const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '' }]).map((c) => `
       <tr>
@@ -51,6 +55,8 @@
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
       </tr>`).join('');
 
+    const clientName = (clients.find((c) => c.id === project.client_id) || {}).name;
+
     c.innerHTML = `
       <div class="page-header">
         <div>
@@ -58,10 +64,14 @@
             <h1 style="margin:0">${escapeHtml(project.name)}</h1>
             <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
             ${project.module ? `<span class="badge badge-blue">${escapeHtml(project.module)}</span>` : ''}
+            ${project.deadline ? deadlineBadge(project.deadline) : ''}
           </div>
-          <p class="subtle">PM: ${escapeHtml(project.manager_name || '—')}</p>
+          <p class="subtle">PM: ${escapeHtml(project.manager_name || '—')}${clientName ? ` · Klant: ${escapeHtml(clientName)}` : ''}</p>
         </div>
-        <button class="btn btn-primary" id="syncBtn">Synchroniseer Moneybird</button>
+        <div style="display:flex; gap:.5rem">
+          ${project.has_pdf ? `<a class="btn btn-ghost" href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>⬇ Offerte-PDF</a>` : ''}
+          <button class="btn btn-primary" id="syncBtn">Synchroniseer Moneybird</button>
+        </div>
       </div>
 
       <div class="grid grid-2">
@@ -69,7 +79,7 @@
           <h3>Beschrijving</h3>
           <p>${escapeHtml(project.description || '—')}</p>
           ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
-          ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}</p>` : ''}
+          ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
           ${(project.contacts && project.contacts.length) ? `
             <h3>Contactpersonen</h3>
             <ul style="margin:.25rem 0 0; padding-left:1.2rem">
@@ -79,10 +89,11 @@
             </ul>` : ''}
         </div>
         <div class="card-static">
-          <h3>Uren</h3>
+          <h3>Uren & Deadline</h3>
           <p><strong>Verbruikt:</strong> ${project.hours_used.toFixed(1)} uur</p>
           <p><strong>Beschikbaar:</strong> ${(project.available_hours || 0).toFixed(1)} uur</p>
           <p><strong>Uurtarief:</strong> € ${(project.hourly_rate || 0).toFixed(2)}</p>
+          ${project.deadline ? `<p><strong>Deadline:</strong> ${fmtDate(project.deadline)}</p>` : ''}
           <div class="progress big">
             <div class="progress-bar ${progressBarClass(project.percentage_used)}" style="width:${Math.min(project.percentage_used, 100)}%"></div>
           </div>
@@ -90,9 +101,28 @@
         </div>
       </div>
 
+      <h2>Notities</h2>
+      <div class="card-static">
+        <form id="noteForm" class="form" style="margin-bottom:1rem">
+          <label><textarea name="text" rows="3" placeholder="Voeg een notitie toe (klant belde, afspraak verzet, …)"></textarea></label>
+          <div><button class="btn btn-primary" type="submit">+ Notitie toevoegen</button></div>
+        </form>
+        <div id="notesList">
+          ${(project.notes && project.notes.length > 0)
+            ? [...project.notes].reverse().map((n) => `
+                <div style="border-top:1px solid var(--border); padding:.75rem 0">
+                  <div class="subtle" style="font-size:.85rem">
+                    <strong>${escapeHtml(n.author_name)}</strong> · ${new Date(n.created_at).toLocaleString('nl-NL')}
+                    ${(me.role === 'admin' || n.author_id === me.id) ? `<a href="#" data-delete-note="${n.id}" style="margin-left:.5rem">verwijder</a>` : ''}
+                  </div>
+                  <div style="white-space:pre-wrap; margin-top:.25rem">${escapeHtml(n.text)}</div>
+                </div>`).join('')
+            : '<p class="subtle">Nog geen notities.</p>'}
+        </div>
+      </div>
+
       <div class="card-static" style="margin-top:1rem">
         <h3>Project bewerken</h3>
-        <p class="subtle" style="margin-top:-.5rem">Pas projectgegevens aan — bv. extra uren toevoegen als het budget opgehoogd is.</p>
         <form id="editForm" class="form">
           <label>
             <span class="lbl">Projectnaam</span>
@@ -115,13 +145,25 @@
               <span class="lbl">Module</span>
               <select name="module">${moduleOptions}</select>
             </label>
-            ${canEditManager ? `
+            <label>
+              <span class="lbl">Klant</span>
+              <select name="client_id">${clientOptions}</select>
+            </label>
+            <label>
+              <span class="lbl">Deadline</span>
+              <input type="date" name="deadline" value="${escapeHtml(project.deadline || '')}">
+            </label>
+          </div>
+
+          ${canEditManager ? `
+            <div class="form-row">
               <label>
                 <span class="lbl">Projectmanager</span>
                 <select name="manager_id">${managerOptions}</select>
-              </label>` : '<label></label>'}
-            <label></label>
-          </div>
+              </label>
+              <label></label>
+              <label></label>
+            </div>` : ''}
 
           <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
 
@@ -132,12 +174,13 @@
           </table>
           <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
-          <h4>Team — wie werkt er aan dit project?</h4>
+          <h4>Team</h4>
           <p class="subtle" style="margin-top:-.4rem">Selecteer alle medewerkers die aan dit project werken.</p>
           <div id="teamGrid" class="checkbox-grid"><span class="subtle">Medewerkers laden…</span></div>
 
           <div style="margin-top:1rem">
             <button class="btn btn-primary" type="submit">Wijzigingen opslaan</button>
+            ${project.has_pdf ? `<button class="btn btn-ghost" type="button" id="deletePdfBtn">Verwijder opgeslagen PDF</button>` : ''}
           </div>
         </form>
       </div>
@@ -145,13 +188,10 @@
       ${(project.team_stats && project.team_stats.length) ? `
         <h2>Uren per teamlid (op dit project)</h2>
         <table class="table">
-          <thead><tr><th>Medewerker</th><th>Uren op dit project</th></tr></thead>
+          <thead><tr><th>Medewerker</th><th>Uren</th></tr></thead>
           <tbody>
             ${project.team_stats.map((m) => `
-              <tr>
-                <td>${escapeHtml(m.name)}</td>
-                <td>${(Number(m.hours) || 0).toFixed(1)}</td>
-              </tr>`).join('')}
+              <tr><td>${escapeHtml(m.name)}</td><td>${(Number(m.hours) || 0).toFixed(1)}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
 
@@ -161,11 +201,7 @@
           <thead><tr><th>Fase</th><th>Beschrijving</th><th>Uren</th></tr></thead>
           <tbody>
             ${project.phases.map((p) => `
-              <tr>
-                <td><strong>${escapeHtml(p.name)}</strong></td>
-                <td>${escapeHtml(p.description || '')}</td>
-                <td>${(Number(p.hours) || 0).toFixed(1)}</td>
-              </tr>`).join('')}
+              <tr><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.description || '')}</td><td>${(Number(p.hours) || 0).toFixed(1)}</td></tr>`).join('')}
           </tbody>
         </table>` : ''}
 
@@ -173,6 +209,20 @@
       <div class="card-static"><canvas id="hoursOverTime" height="120"></canvas></div>
       <h2>Uren per medewerker (alle hours-schrijvers)</h2>
       <div class="card-static"><canvas id="hoursPerUser" height="120"></canvas></div>
+
+      <h2>Activiteit</h2>
+      <div class="card-static">
+        ${(project.activity_log && project.activity_log.length > 0)
+          ? `<table class="table" style="margin:0"><thead><tr><th>Wanneer</th><th>Door</th><th>Wat</th></tr></thead><tbody>
+              ${[...project.activity_log].reverse().slice(0, 50).map((a) => `
+                <tr>
+                  <td>${new Date(a.timestamp).toLocaleString('nl-NL')}</td>
+                  <td>${escapeHtml(a.user_name)}</td>
+                  <td>${escapeHtml(activityDescription(a))}</td>
+                </tr>`).join('')}
+            </tbody></table>`
+          : '<p class="subtle">Nog geen activiteit gelogd.</p>'}
+      </div>
     `;
 
     document.getElementById('syncBtn').onclick = async () => {
@@ -183,23 +233,45 @@
       } catch (err) { toast(err.message, 'error'); }
     };
 
-    const teamGrid = document.getElementById('teamGrid');
-    apiGet('/api/moneybird/employees')
-      .then(({ employees }) => {
-        const checkedIds = new Set((project.team || []).map((t) => t.moneybird_user_id));
-        if (employees.length === 0) {
-          teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden uit Moneybird.</span>';
-          return;
-        }
-        teamGrid.innerHTML = employees.map((e) => `
-          <label>
-            <input type="checkbox" data-emp-id="${e.id}" data-emp-name="${(e.name || '').replace(/"/g, '&quot;')}" ${checkedIds.has(e.id) ? 'checked' : ''}>
-            ${escapeHtml(e.name)}
-          </label>`).join('');
-      })
-      .catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
+    // Notities
+    document.getElementById('noteForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = e.target.elements.text.value.trim();
+      if (!text) { toast('Notitie mag niet leeg zijn', 'error'); return; }
+      try {
+        await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { add_note: { text } });
+        toast('Notitie toegevoegd', 'success');
+        await load();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+    for (const link of document.querySelectorAll('a[data-delete-note]')) {
+      link.onclick = async (ev) => {
+        ev.preventDefault();
+        if (!confirm('Notitie verwijderen?')) return;
+        try {
+          await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { delete_note: { id: link.dataset.deleteNote } });
+          toast('Notitie verwijderd', 'success');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
 
-    // Contacten beheer
+    // Team
+    const teamGrid = document.getElementById('teamGrid');
+    apiGet('/api/moneybird/employees').then(({ employees }) => {
+      const checkedIds = new Set((project.team || []).map((t) => t.moneybird_user_id));
+      if (employees.length === 0) {
+        teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden.</span>';
+        return;
+      }
+      teamGrid.innerHTML = employees.map((e) => `
+        <label>
+          <input type="checkbox" data-emp-id="${e.id}" data-emp-name="${(e.name || '').replace(/"/g, '&quot;')}" ${checkedIds.has(e.id) ? 'checked' : ''}>
+          ${escapeHtml(e.name)}
+        </label>`).join('');
+    }).catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
+
+    // Contacten
     function bindContactRow(tr) {
       const removeBtn = tr.querySelector('[data-remove]');
       if (removeBtn) {
@@ -222,6 +294,7 @@
       bindContactRow(tr);
     };
 
+    // Edit form
     document.getElementById('editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -242,6 +315,8 @@
         exceptions: f.get('exceptions'),
         status: f.get('status'),
         module: f.get('module'),
+        client_id: f.get('client_id') || '',
+        deadline: f.get('deadline') || '',
         contacts,
         team,
       };
@@ -253,9 +328,22 @@
       } catch (err) { toast(err.message, 'error'); }
     });
 
+    // PDF verwijderen
+    const delPdfBtn = document.getElementById('deletePdfBtn');
+    if (delPdfBtn) {
+      delPdfBtn.onclick = async () => {
+        if (!confirm('Opgeslagen offerte-PDF verwijderen?')) return;
+        try {
+          await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { delete_pdf: true });
+          toast('PDF verwijderd', 'success');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    }
+
     if (!chartsRendered) {
       chartsRendered = true;
-      apiGet(`/api/projects/${encodeURIComponent(id)}/hours-over-time`).then((d) => {
+      apiGet(`/api/projects/${encodeURIComponent(id)}/hours?type=over-time`).then((d) => {
         const ctx = document.getElementById('hoursOverTime');
         if (!ctx) return;
         const datasets = [
@@ -271,7 +359,7 @@
         new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets }, options: { responsive: true, interaction: { mode: 'index' } } });
       });
 
-      apiGet(`/api/projects/${encodeURIComponent(id)}/hours-per-user`).then((d) => {
+      apiGet(`/api/projects/${encodeURIComponent(id)}/hours?type=per-user`).then((d) => {
         const ctx = document.getElementById('hoursPerUser');
         if (!ctx) return;
         new Chart(ctx, {

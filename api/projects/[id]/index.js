@@ -1,23 +1,29 @@
-// GET   /api/projects/:id - detail incl. stats
-// PATCH /api/projects/:id - update editable fields (status, team, name, description, module, contacts...)
+// GET   /api/projects/:id                       - detail incl. stats, notes, activity_log
+// GET   /api/projects/:id?action=download_pdf   - serveert de opgeslagen PDF
+// PATCH /api/projects/:id                       - update editable fields (auto-logt wijzigingen)
+// PATCH /api/projects/:id  body { add_note:{ text } }     - voeg notitie toe
+// PATCH /api/projects/:id  body { delete_note:{ id } }    - verwijder notitie (admin of auteur)
+// PATCH /api/projects/:id  body { delete_pdf: true }      - verwijder opgeslagen PDF
+import crypto from 'node:crypto';
 import { requireUser } from '../../../lib/auth.js';
 import {
   getProject,
   saveProject,
   getUserById,
   listTimeEntries,
+  getPdfBlob,
+  deletePdfBlob,
 } from '../../../lib/db.js';
+import { diffProjectActivity, appendActivity, logActivity } from '../../../lib/activity.js';
 
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 const EDITABLE_FIELDS = [
-  'name',
-  'description',
-  'available_hours',
-  'hourly_rate',
-  'exceptions',
-  'manager_id',
+  'name', 'description', 'available_hours', 'hourly_rate',
+  'exceptions', 'manager_id', 'client_id', 'deadline',
 ];
+
+function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
 
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
@@ -27,8 +33,7 @@ function normalizeTeam(input) {
     if (!m) continue;
     const id = String(m.moneybird_user_id || m.id || '').trim();
     const name = String(m.name || '').trim();
-    if (!id || !name) continue;
-    if (seen.has(id)) continue;
+    if (!id || !name || seen.has(id)) continue;
     seen.add(id);
     out.push({ moneybird_user_id: id, name });
   }
@@ -65,15 +70,33 @@ async function buildDetail(project) {
     ...project,
     status: project.status || 'in_progress',
     module: project.module || '',
+    deadline: project.deadline || '',
+    client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
+    notes: Array.isArray(project.notes) ? project.notes : [],
+    activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
     team,
     team_stats,
     hours_used: hoursUsed,
     percentage_used: pct,
     within_budget: avail > 0 ? hoursUsed <= avail : null,
+    has_pdf: !!project.pdf_stored,
     manager_name: manager?.name || null,
     manager_email: manager?.email || null,
   };
+}
+
+async function streamPdf(res, projectId) {
+  const blob = await getPdfBlob(projectId);
+  if (!blob) {
+    res.status(404).json({ error: 'Geen PDF opgeslagen voor dit project' });
+    return;
+  }
+  const buf = Buffer.from(blob.base64, 'base64');
+  res.setHeader('Content-Type', blob.mime || 'application/pdf');
+  const safeName = (blob.filename || 'offerte.pdf').replace(/[^\w.\- ]/g, '_');
+  res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+  res.status(200).send(buf);
 }
 
 export default async function handler(req, res) {
@@ -90,12 +113,71 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
+    if (req.query.action === 'download_pdf') {
+      await streamPdf(res, project.id);
+      return;
+    }
     res.status(200).json({ project: await buildDetail(project) });
     return;
   }
 
   if (req.method === 'PATCH') {
     const b = req.body || {};
+
+    // ── Notitie toevoegen ────────────────────────────────────────
+    if (b.add_note) {
+      const text = String(b.add_note.text || '').trim();
+      if (!text) {
+        res.status(400).json({ error: 'Notitie mag niet leeg zijn' });
+        return;
+      }
+      if (!Array.isArray(project.notes)) project.notes = [];
+      const note = {
+        id: 'n_' + crypto.randomBytes(6).toString('hex'),
+        text,
+        author_id: user.id,
+        author_name: user.name,
+        created_at: new Date().toISOString(),
+      };
+      project.notes.push(note);
+      logActivity(project, user, 'note_added', { note_id: note.id });
+      await saveProject(project);
+      res.status(200).json({ project: await buildDetail(project) });
+      return;
+    }
+
+    // ── Notitie verwijderen ──────────────────────────────────────
+    if (b.delete_note) {
+      const id = String(b.delete_note.id || '');
+      const notes = Array.isArray(project.notes) ? project.notes : [];
+      const note = notes.find((n) => n.id === id);
+      if (!note) {
+        res.status(404).json({ error: 'Notitie niet gevonden' });
+        return;
+      }
+      if (user.role !== 'admin' && note.author_id !== user.id) {
+        res.status(403).json({ error: 'Alleen de auteur of een admin kan deze notitie verwijderen' });
+        return;
+      }
+      project.notes = notes.filter((n) => n.id !== id);
+      logActivity(project, user, 'note_deleted', { note_id: id });
+      await saveProject(project);
+      res.status(200).json({ project: await buildDetail(project) });
+      return;
+    }
+
+    // ── PDF verwijderen ──────────────────────────────────────────
+    if (b.delete_pdf) {
+      await deletePdfBlob(project.id);
+      project.pdf_stored = false;
+      logActivity(project, user, 'pdf_deleted', {});
+      await saveProject(project);
+      res.status(200).json({ project: await buildDetail(project) });
+      return;
+    }
+
+    // ── Reguliere update (met auto-activity-log) ─────────────────
+    const before = JSON.parse(JSON.stringify(project));
     for (const f of EDITABLE_FIELDS) {
       if (b[f] !== undefined) project[f] = b[f];
     }
@@ -107,18 +189,17 @@ export default async function handler(req, res) {
       const m = String(b.module || '').trim();
       project.module = VALID_MODULES.includes(m) ? m : '';
     }
-    if (b.contacts !== undefined) {
-      project.contacts = normalizeContacts(b.contacts);
+    if (b.deadline !== undefined) {
+      project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
     }
-    if (b.team !== undefined) {
-      project.team = normalizeTeam(b.team);
-    }
-    if (typeof project.available_hours === 'string') {
-      project.available_hours = Number(project.available_hours) || 0;
-    }
-    if (typeof project.hourly_rate === 'string') {
-      project.hourly_rate = Number(project.hourly_rate) || 0;
-    }
+    if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
+    if (b.team !== undefined) project.team = normalizeTeam(b.team);
+    if (typeof project.available_hours === 'string') project.available_hours = Number(project.available_hours) || 0;
+    if (typeof project.hourly_rate === 'string') project.hourly_rate = Number(project.hourly_rate) || 0;
+
+    const activity = diffProjectActivity(before, project, user);
+    appendActivity(project, activity);
+
     await saveProject(project);
     res.status(200).json({ project: await buildDetail(project) });
     return;

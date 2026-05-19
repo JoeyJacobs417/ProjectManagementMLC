@@ -41,7 +41,7 @@
           </select>
         </label>
         <label>Ontvangers (komma-gescheiden)
-          <input type="text" name="report_recipients" placeholder="bv. joey@bedrijf.nl, finance@bedrijf.nl">
+          <input type="text" name="report_recipients" placeholder="bv. joey@bedrijf.nl">
         </label>
         <label></label>
       </div>
@@ -50,15 +50,23 @@
       </div>
 
       <h4>PDF-prompt voor Claude</h4>
-      <p class="subtle" style="margin-top:-.4rem">Standaardinstructie bij het uitlezen van project-PDF's. Wordt op de "Nieuw project" pagina als startwaarde gebruikt; je kunt 'm daar per upload nog tweaken. Laat leeg om de ingebakken default te gebruiken.</p>
+      <p class="subtle" style="margin-top:-.4rem">Standaardinstructie bij PDF-uploads. Laat leeg voor de ingebakken default.</p>
       <label><textarea name="pdf_prompt" rows="8" placeholder="Leeg = ingebakken default..."></textarea></label>
 
       <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Alles opslaan</button></div>
     </form>
   </div>
 
+  <h2 style="margin-top:3rem">Klanten</h2>
+  <p class="subtle">Beheer klanten/bedrijven. Projecten kunnen aan een klant gekoppeld worden, contactpersonen worden bij nieuw project automatisch overgenomen.</p>
+  <div class="card-static">
+    <div id="clientsList"></div>
+    <button class="btn btn-ghost" type="button" id="addClient" style="margin-top:.5rem">+ Klant toevoegen</button>
+    <div style="margin-top:1rem"><button class="btn btn-primary" type="button" id="saveClients">Klanten opslaan</button></div>
+  </div>
+
   <h2 style="margin-top:3rem">Capaciteit per medewerker</h2>
-  <p class="subtle">Hoeveel uur per week kan iedere medewerker schrijven? Gebruikt op de Planning-pagina.</p>
+  <p class="subtle">Uren/week per medewerker — gebruikt op de Planning-pagina.</p>
   <div class="card-static">
     <form id="capacitiesForm" class="form">
       <div id="capacitiesGrid"><span class="subtle">Medewerkers laden…</span></div>
@@ -67,7 +75,6 @@
   </div>
 
   <h2 style="margin-top:3rem">Gebruikers</h2>
-
   <div class="card-static">
     <h3>Nieuwe gebruiker aanmaken</h3>
     <form id="newUserForm" class="form">
@@ -95,7 +102,6 @@
   const me = await renderTopbar('/admin-settings.html');
   if (!me || me.role !== 'admin') location.href = '/dashboard.html';
 
-  // ── Settings + users laden ──────────────────────────────────────
   const [{ settings }, { users: allUsers }] = await Promise.all([
     apiGet('/api/admin/settings'),
     apiGet('/api/admin/users').catch(() => ({ users: [] })),
@@ -111,7 +117,7 @@
     if (el) el.value = settings[k] ?? '';
   }
 
-  // ── Recipients preview (urenverbruik + inactiviteit) ────────────
+  // ── Recipients preview ──────────────────────────────────────────
   function updateRecipientsPreview() {
     const extra = (document.querySelector('[name=notify_emails_extra]').value || '')
       .split(',').map((s) => s.trim()).filter(Boolean);
@@ -124,15 +130,13 @@
     } else {
       lines.push(`• Actieve admins: ${adminEmails.map(escapeHtml).join(', ')}`);
     }
-    if (extra.length) {
-      lines.push(`• Extra ontvangers (hieronder ingesteld): ${extra.map(escapeHtml).join(', ')}`);
-    }
+    if (extra.length) lines.push(`• Extra: ${extra.map(escapeHtml).join(', ')}`);
     document.getElementById('recipientsPreview').innerHTML = lines.join('<br>');
   }
   updateRecipientsPreview();
   document.querySelector('[name=notify_emails_extra]').addEventListener('input', updateRecipientsPreview);
 
-  // ── Settings opslaan ────────────────────────────────────────────
+  // ── Settings save ───────────────────────────────────────────────
   async function saveMainSettings() {
     const f = new FormData(document.getElementById('settingsForm'));
     await apiSend('/api/admin/settings', 'POST', {
@@ -146,22 +150,110 @@
       pdf_prompt: f.get('pdf_prompt'),
     });
   }
-
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try { await saveMainSettings(); toast('Instellingen opgeslagen', 'success'); }
     catch (err) { toast(err.message, 'error'); }
   });
 
-  // ── Test rapportage — eerst saven, dan verzenden ────────────────
   document.getElementById('testReportBtn').onclick = async () => {
     try {
       await saveMainSettings();
       const r = await apiSend('/api/admin/settings?action=test_report', 'POST', {});
       if (r.sent) toast(`Test-rapportage verstuurd naar ${r.recipients.length} ontvanger(s) (${r.count} projecten).`, 'success');
       else if (r.reason === 'no_recipients') toast('Geen ontvangers ingevuld — vul ze in en probeer opnieuw.', 'error');
-      else if (r.reason === 'no_projects') toast('Geen "In progress" projecten gevonden om te rapporteren.', 'info');
+      else if (r.reason === 'no_projects') toast('Geen "In progress" projecten om te rapporteren.', 'info');
       else toast(`Niet verstuurd: ${r.reason}`, 'info');
+    } catch (err) { toast(err.message, 'error'); }
+  };
+
+  // ── Klanten ─────────────────────────────────────────────────────
+  let workingClients = JSON.parse(JSON.stringify(settings.clients || []));
+
+  function renderClients() {
+    const el = document.getElementById('clientsList');
+    if (workingClients.length === 0) {
+      el.innerHTML = '<p class="subtle">Nog geen klanten. Klik op "+ Klant toevoegen".</p>';
+      return;
+    }
+    el.innerHTML = workingClients.map((c, i) => {
+      const contactsRows = (c.contacts && c.contacts.length ? c.contacts : [{ name: '', email: '' }]).map((cc, j) => `
+        <tr>
+          <td><input type="text" data-cli="${i}" data-c-idx="${j}" data-c-field="name" value="${escapeHtml(cc.name || '')}" placeholder="Naam"></td>
+          <td><input type="email" data-cli="${i}" data-c-idx="${j}" data-c-field="email" value="${escapeHtml(cc.email || '')}" placeholder="email@bedrijf.nl"></td>
+          <td><button class="btn btn-ghost" type="button" data-remove-contact="${i}|${j}">Verwijder</button></td>
+        </tr>`).join('');
+      return `
+        <div style="border-top:1px solid var(--border); padding:1rem 0">
+          <div class="form-row" style="grid-template-columns:1fr auto">
+            <label>
+              <span class="lbl">Bedrijfsnaam</span>
+              <input type="text" data-cli="${i}" data-field="name" value="${escapeHtml(c.name || '')}">
+            </label>
+            <label style="align-self:end">
+              <button class="btn btn-ghost" type="button" data-remove-client="${i}">Klant verwijderen</button>
+            </label>
+          </div>
+          <table class="table" style="margin:.5rem 0 0">
+            <thead><tr><th>Contactpersoon</th><th>E-mail</th><th></th></tr></thead>
+            <tbody>${contactsRows}</tbody>
+          </table>
+          <button class="btn btn-ghost" type="button" data-add-contact="${i}" style="margin-top:.25rem">+ Contact toevoegen</button>
+        </div>`;
+    }).join('');
+
+    // Bind events
+    el.querySelectorAll('input[data-cli][data-field]').forEach((inp) => {
+      inp.oninput = () => {
+        const i = Number(inp.dataset.cli);
+        workingClients[i][inp.dataset.field] = inp.value;
+      };
+    });
+    el.querySelectorAll('input[data-cli][data-c-idx]').forEach((inp) => {
+      inp.oninput = () => {
+        const i = Number(inp.dataset.cli);
+        const j = Number(inp.dataset.cIdx);
+        if (!workingClients[i].contacts) workingClients[i].contacts = [];
+        if (!workingClients[i].contacts[j]) workingClients[i].contacts[j] = { name: '', email: '' };
+        workingClients[i].contacts[j][inp.dataset.cField] = inp.value;
+      };
+    });
+    el.querySelectorAll('button[data-add-contact]').forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.addContact);
+        if (!workingClients[i].contacts) workingClients[i].contacts = [];
+        workingClients[i].contacts.push({ name: '', email: '' });
+        renderClients();
+      };
+    });
+    el.querySelectorAll('button[data-remove-contact]').forEach((btn) => {
+      btn.onclick = () => {
+        const [i, j] = btn.dataset.removeContact.split('|').map(Number);
+        workingClients[i].contacts.splice(j, 1);
+        renderClients();
+      };
+    });
+    el.querySelectorAll('button[data-remove-client]').forEach((btn) => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.removeClient);
+        if (!confirm(`"${workingClients[i].name || 'deze klant'}" verwijderen?`)) return;
+        workingClients.splice(i, 1);
+        renderClients();
+      };
+    });
+  }
+  renderClients();
+
+  document.getElementById('addClient').onclick = () => {
+    workingClients.push({ name: '', contacts: [{ name: '', email: '' }] });
+    renderClients();
+  };
+  document.getElementById('saveClients').onclick = async () => {
+    try {
+      const r = await apiSend('/api/admin/settings', 'POST', { clients: workingClients });
+      workingClients = JSON.parse(JSON.stringify(r.settings.clients || []));
+      toast('Klanten opgeslagen', 'success');
+      renderClients();
     } catch (err) { toast(err.message, 'error'); }
   };
 
@@ -180,12 +272,10 @@
             <tr>
               <td>${escapeHtml(e.name)}</td>
               <td><input type="number" step="0.5" min="0" data-cap-id="${e.id}" value="${caps[e.id] ?? ''}" placeholder="bv. 40"></td>
-            </tr>
-          `).join('')}
+            </tr>`).join('')}
         </tbody>
       </table>`;
   }
-
   document.getElementById('capacitiesForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const newCaps = {};
@@ -258,10 +348,8 @@
     const f = new FormData(e.target);
     try {
       await apiSend('/api/admin/users', 'POST', {
-        name: f.get('name'),
-        email: f.get('email'),
-        role: f.get('role'),
-        password: f.get('password'),
+        name: f.get('name'), email: f.get('email'),
+        role: f.get('role'), password: f.get('password'),
       });
       toast('Gebruiker aangemaakt', 'success');
       e.target.reset();

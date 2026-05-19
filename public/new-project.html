@@ -11,7 +11,7 @@
   <div class="card-static" id="step1">
     <h3>Stap 1 — Upload PDF (optioneel)</h3>
     <p class="subtle">Upload de offerte/voorstel-PDF. Claude leest hier automatisch beschikbare uren,
-      fases, beschrijving, uurtarief en uitzonderingen uit.</p>
+      fases, beschrijving, uurtarief en uitzonderingen uit. De PDF wordt opgeslagen zodat je hem later kunt downloaden vanaf de project-pagina.</p>
     <form id="pdfForm" class="form">
       <label>PDF-bestand<input type="file" name="pdf" accept="application/pdf" required></label>
 
@@ -36,6 +36,7 @@
     <p class="subtle">Claude heeft het volgende uit de PDF gehaald — pas aan waar nodig.</p>
     <form id="projectForm" class="form">
       <input type="hidden" name="source_pdf_filename" id="sourcePdf">
+      <input type="hidden" name="pdf_pending_token" id="pdfToken">
 
       <label>
         <span class="lbl">Projectnaam <span class="required">*</span></span>
@@ -66,6 +67,17 @@
             <option value="Project">Project</option>
           </select>
         </label>
+        <label>
+          <span class="lbl">Klant</span>
+          <select name="client_id" id="clientField"><option value="">— Geen —</option></select>
+        </label>
+        <label>
+          <span class="lbl">Deadline</span>
+          <input type="date" name="deadline">
+        </label>
+      </div>
+
+      <div class="form-row">
         <label>Projectmanager<select name="manager_id"><option value="">— Kies —</option></select></label>
         <label>
           <span class="lbl">Moneybird project <span class="required">*</span></span>
@@ -73,12 +85,13 @@
             <option value="">— Moneybird-projecten laden —</option>
           </select>
         </label>
+        <label></label>
       </div>
 
       <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3"></textarea></label>
 
       <h4>Contactpersonen bij de klant</h4>
-      <p class="subtle" style="margin-top:-.5rem">Naam + e-mailadres. Meerdere mogelijk.</p>
+      <p class="subtle" style="margin-top:-.5rem">Naam + e-mailadres. Meerdere mogelijk. Klant kiezen vult deze automatisch met de contacten die bij die klant horen.</p>
       <table class="table">
         <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
         <tbody id="contactsBody">
@@ -91,8 +104,8 @@
       </table>
       <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
-      <h4>Team — wie werkt er aan dit project?</h4>
-      <p class="subtle" style="margin-top:-.5rem">Selecteer alle medewerkers die aan dit project werken (meerdere mogelijk).</p>
+      <h4>Team</h4>
+      <p class="subtle" style="margin-top:-.5rem">Selecteer alle medewerkers die aan dit project werken.</p>
       <div id="teamGrid" class="checkbox-grid">
         <span class="subtle">Medewerkers laden…</span>
       </div>
@@ -118,7 +131,7 @@
   </div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS, escapeHtml } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   // Status dropdown
@@ -130,7 +143,36 @@
     statusSel.appendChild(o);
   }
 
-  // PDF prompt: probeer settings (admin), val terug op default uit lib/claude.js (gedupliceerd hier).
+  // Settings (voor prompt + clients)
+  let settings = { clients: [], pdf_prompt: '' };
+  try { ({ settings } = await apiGet('/api/admin/settings')); } catch {}
+
+  // Klanten dropdown
+  const clientSel = document.getElementById('clientField');
+  (settings.clients || []).forEach((c) => {
+    const o = document.createElement('option');
+    o.value = c.id; o.textContent = c.name;
+    clientSel.appendChild(o);
+  });
+  clientSel.onchange = () => {
+    // Vul contactpersonen automatisch
+    const client = (settings.clients || []).find((c) => c.id === clientSel.value);
+    if (!client || !Array.isArray(client.contacts) || client.contacts.length === 0) return;
+    if (!confirm(`Contactpersonen van "${client.name}" overnemen?`)) return;
+    const tbody = document.getElementById('contactsBody');
+    tbody.innerHTML = '';
+    for (const c of client.contacts) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
+        <td><input type="email" data-contact="email" value="${escapeHtml(c.email || '')}"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
+      tbody.appendChild(tr);
+      bindContactRow(tr);
+    }
+  };
+
+  // PDF prompt
   const DEFAULT_PDF_PROMPT = `Lees de bijgevoegde PDF (een offerte of projectvoorstel) en haal de volgende informatie eruit:
 
 - "available_hours": totaal aantal beschikbare uren (getal, anders 0)
@@ -142,17 +184,9 @@
 Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
   const PROMPT_STORAGE_KEY = 'pm_pdf_prompt_user';
   const promptField = document.getElementById('promptField');
-
-  let savedPrompt = '';
-  if (me.role === 'admin') {
-    try {
-      const r = await apiGet('/api/admin/settings');
-      savedPrompt = (r.settings.pdf_prompt || '').trim();
-    } catch {}
-  }
+  const savedPrompt = (settings.pdf_prompt || '').trim();
   const userOverride = sessionStorage.getItem(PROMPT_STORAGE_KEY);
   promptField.value = userOverride || savedPrompt || DEFAULT_PDF_PROMPT;
-
   document.getElementById('resetPromptBtn').onclick = (e) => {
     e.preventDefault();
     promptField.value = savedPrompt || DEFAULT_PDF_PROMPT;
@@ -168,12 +202,12 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
   } else {
     managers = [me];
   }
-  const sel = document.querySelector('select[name=manager_id]');
+  const mgrSel = document.querySelector('select[name=manager_id]');
   managers.forEach((m) => {
     const opt = document.createElement('option');
     opt.value = m.id;
     opt.textContent = `${m.name} (${m.email})`;
-    sel.appendChild(opt);
+    mgrSel.appendChild(opt);
   });
 
   // Moneybird projecten
@@ -187,9 +221,7 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
         mbSel.appendChild(o);
       });
     })
-    .catch((err) => {
-      mbSel.innerHTML = `<option value="">Fout: ${err.message}</option>`;
-    });
+    .catch((err) => { mbSel.innerHTML = `<option value="">Fout: ${err.message}</option>`; });
 
   // Medewerkers
   const teamGrid = document.getElementById('teamGrid');
@@ -205,20 +237,16 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
           ${e.name}
         </label>`).join('');
     })
-    .catch((err) => {
-      teamGrid.innerHTML = `<span class="subtle">Fout bij laden: ${err.message}</span>`;
-    });
+    .catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout bij laden: ${err.message}</span>`; });
 
-  // Contactpersonen rij-beheer
+  // Contacten
   function bindContactRow(tr) {
     const removeBtn = tr.querySelector('[data-remove]');
     if (removeBtn) {
       removeBtn.onclick = () => {
         const tbody = document.getElementById('contactsBody');
         if (tbody.children.length > 1) tr.remove();
-        else {
-          tr.querySelectorAll('input').forEach((i) => (i.value = ''));
-        }
+        else tr.querySelectorAll('input').forEach((i) => (i.value = ''));
       };
     }
   }
@@ -243,6 +271,7 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       document.querySelector('[name=hourly_rate]').value = parsed.hourly_rate || 0;
       document.querySelector('[name=exceptions]').value = parsed.exceptions || '';
       document.getElementById('sourcePdf').value = parsed.source_pdf_filename || '';
+      document.getElementById('pdfToken').value = parsed.pdf_pending_token || '';
       if (Array.isArray(parsed.phases) && parsed.phases.length) {
         const tbody = document.getElementById('phasesBody');
         tbody.innerHTML = '';
@@ -328,8 +357,11 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       manager_id: f.get('manager_id') || null,
       moneybird_project_id: mbId,
       source_pdf_filename: f.get('source_pdf_filename') || null,
+      pdf_pending_token: f.get('pdf_pending_token') || null,
       status: f.get('status') || 'in_progress',
       module: f.get('module') || '',
+      client_id: f.get('client_id') || '',
+      deadline: f.get('deadline') || '',
       contacts,
       team,
       phases,

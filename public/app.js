@@ -66,6 +66,71 @@ export function statusLabel(value) {
   return opt ? opt.label : value;
 }
 
+// ── Datum-helpers ──────────────────────────────────────────────────
+export function fmtDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = String(iso).split('-');
+  return `${d}-${m}-${y}`;
+}
+
+export function daysFromNow(iso) {
+  if (!iso) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(iso);
+  if (Number.isNaN(target.getTime())) return null;
+  target.setHours(0, 0, 0, 0);
+  return Math.round((target - today) / (1000 * 60 * 60 * 24));
+}
+
+export function deadlineBadge(iso) {
+  const d = daysFromNow(iso);
+  if (d === null) return '';
+  if (d < 0) return `<span class="badge badge-red" title="Deadline verlopen">⚠ ${fmtDate(iso)} (${-d}d over)</span>`;
+  if (d <= 7) return `<span class="badge badge-red">⏰ ${fmtDate(iso)} (${d}d)</span>`;
+  if (d <= 21) return `<span class="badge badge-orange">⏰ ${fmtDate(iso)} (${d}d)</span>`;
+  return `<span class="badge badge-blue">${fmtDate(iso)} (${d}d)</span>`;
+}
+
+// ── Activity log labels ────────────────────────────────────────────
+const ACTION_LABELS = {
+  created: 'Project aangemaakt',
+  name_changed: 'Naam gewijzigd',
+  status_changed: 'Status gewijzigd',
+  available_hours_changed: 'Beschikbare uren aangepast',
+  hourly_rate_changed: 'Uurtarief aangepast',
+  module_changed: 'Module gewijzigd',
+  manager_changed: 'Projectmanager gewijzigd',
+  deadline_changed: 'Deadline gewijzigd',
+  client_changed: 'Klant gewijzigd',
+  team_added: 'Teamlid toegevoegd',
+  team_removed: 'Teamlid verwijderd',
+  note_added: 'Notitie toegevoegd',
+  note_deleted: 'Notitie verwijderd',
+  pdf_deleted: 'Offerte-PDF verwijderd',
+};
+
+export function activityDescription(entry) {
+  const label = ACTION_LABELS[entry.action] || entry.action;
+  const d = entry.details || {};
+  if (entry.action === 'status_changed') {
+    return `${label}: ${statusLabel(d.from)} → ${statusLabel(d.to)}`;
+  }
+  if (entry.action === 'available_hours_changed' || entry.action === 'hourly_rate_changed') {
+    return `${label}: ${d.from} → ${d.to}`;
+  }
+  if (entry.action === 'name_changed' || entry.action === 'module_changed') {
+    return `${label}: "${d.from || '—'}" → "${d.to || '—'}"`;
+  }
+  if (entry.action === 'deadline_changed') {
+    return `${label}: ${d.from ? fmtDate(d.from) : '—'} → ${d.to ? fmtDate(d.to) : '—'}`;
+  }
+  if (entry.action === 'team_added' || entry.action === 'team_removed') {
+    return `${label}: ${d.name || ''}`;
+  }
+  return label;
+}
+
 export async function renderTopbar(activePath) {
   const me = await apiGet('/api/auth/me').catch(() => null);
   if (!me) return null;
@@ -74,6 +139,7 @@ export async function renderTopbar(activePath) {
     { href: '/dashboard.html', label: 'Dashboard' },
     { href: '/projects.html', label: 'Projecten' },
     { href: '/planning.html', label: 'Planning' },
+    { href: '/clients.html', label: 'Klanten' },
   ];
   if (isAdmin) {
     links.push({ href: '/admin-settings.html', label: 'Instellingen' });

@@ -1,7 +1,7 @@
-// GET   /api/admin/settings  - alle instellingen (alle ingelogde users mogen lezen,
-//                              zodat de Planning-pagina capaciteiten + vakanties kan tonen)
+// GET   /api/admin/settings  - alle instellingen (alle ingelogde users mogen lezen)
 // POST  /api/admin/settings  - update (alleen aanwezige velden in body); admin-only
 // POST  /api/admin/settings?action=test_report - stuur direct een test-rapportage; admin-only
+import crypto from 'node:crypto';
 import { requireUser, requireAdmin } from '../../lib/auth.js';
 import { getSettings, saveSettings } from '../../lib/db.js';
 import { sendProjectReport } from '../../lib/notify.js';
@@ -20,30 +20,47 @@ function normalizeCapacities(input) {
   return out;
 }
 
-function isIsoDate(s) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
-}
+function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
 
 function normalizeVacations(input) {
   if (!input || typeof input !== 'object') return {};
   const out = {};
   for (const [k, list] of Object.entries(input)) {
     const id = String(k).trim();
-    if (!id) continue;
-    if (!Array.isArray(list)) continue;
+    if (!id || !Array.isArray(list)) continue;
     const periods = [];
     for (const p of list) {
       if (!p) continue;
       const start = String(p.start || '').trim();
       const end = String(p.end || '').trim();
       const label = String(p.label || '').trim();
-      if (!isIsoDate(start) || !isIsoDate(end)) continue;
-      if (start > end) continue;
+      if (!isIsoDate(start) || !isIsoDate(end) || start > end) continue;
       periods.push({ start, end, label });
     }
     periods.sort((a, b) => a.start.localeCompare(b.start));
     if (periods.length) out[id] = periods;
   }
+  return out;
+}
+
+function normalizeClients(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const c of input) {
+    if (!c) continue;
+    const name = String(c.name || '').trim();
+    if (!name) continue;
+    const id = String(c.id || '').trim() || 'c_' + crypto.randomBytes(6).toString('hex');
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const contacts = Array.isArray(c.contacts) ? c.contacts.map((x) => ({
+      name: String(x.name || '').trim(),
+      email: String(x.email || '').trim(),
+    })).filter((x) => x.name || x.email) : [];
+    out.push({ id, name, contacts });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
@@ -72,8 +89,6 @@ export default async function handler(req, res) {
 
     const b = req.body || {};
     const patch = {};
-    // Alleen velden die expliciet in body zitten worden bijgewerkt — voorkomt dat
-    // een gedeeltelijke save (bv. capaciteiten-form) andere settings overschrijft.
     if (b.threshold_warning !== undefined) patch.threshold_warning = Number(b.threshold_warning) || 80;
     if (b.threshold_critical !== undefined) patch.threshold_critical = Number(b.threshold_critical) || 95;
     if (b.threshold_exceeded !== undefined) patch.threshold_exceeded = Number(b.threshold_exceeded) || 100;
@@ -87,6 +102,7 @@ export default async function handler(req, res) {
     if (b.report_recipients !== undefined) patch.report_recipients = String(b.report_recipients || '').trim();
     if (b.employee_capacities !== undefined) patch.employee_capacities = normalizeCapacities(b.employee_capacities);
     if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
+    if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;

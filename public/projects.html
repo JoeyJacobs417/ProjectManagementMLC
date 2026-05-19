@@ -8,66 +8,102 @@
 <main class="container">
   <div class="page-header">
     <h1>Projecten</h1>
-    <a class="btn btn-primary" href="/new-project.html">+ Nieuw project</a>
+    <div style="display:flex; gap:.5rem">
+      <a class="btn btn-ghost" href="/api/projects?format=xlsx" download>⬇ Export Excel</a>
+      <a class="btn btn-primary" href="/new-project.html">+ Nieuw project</a>
+    </div>
   </div>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
-    <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
-      Filter op status:
-      <select id="statusFilter" style="width:auto">
-        <option value="all">Alle statussen</option>
-        <option value="in_progress">In progress</option>
-        <option value="on_hold">On hold</option>
-        <option value="done">Done</option>
-        <option value="future">Future</option>
-      </select>
+    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:.75rem">
+      <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500; flex:1; min-width:240px">
+        🔍
+        <input type="search" id="searchInput" placeholder="Zoek op project, klant, contact, manager, module…" style="flex:1">
+      </label>
+      <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
+        Status:
+        <select id="statusFilter" style="width:auto">
+          <option value="all">Alle statussen</option>
+          <option value="in_progress">In progress</option>
+          <option value="on_hold">On hold</option>
+          <option value="done">Done</option>
+          <option value="future">Future</option>
+        </select>
+      </label>
       <span class="subtle" id="filterCount"></span>
-    </label>
+    </div>
   </div>
 
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge } from '/app.js';
   await renderTopbar('/projects.html');
 
-  const { projects } = await apiGet('/api/projects');
+  const [{ projects }, { settings }] = await Promise.all([
+    apiGet('/api/projects'),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
+  ]);
+  const clientsById = Object.fromEntries((settings.clients || []).map((c) => [c.id, c]));
 
-  const STORAGE_KEY = 'pm_projects_status_filter';
-  const filter = document.getElementById('statusFilter');
-  filter.value = sessionStorage.getItem(STORAGE_KEY) || 'all';
+  const STORAGE_STATUS = 'pm_projects_status_filter';
+  const STORAGE_QUERY = 'pm_projects_query';
+  const status = document.getElementById('statusFilter');
+  const search = document.getElementById('searchInput');
+  status.value = sessionStorage.getItem(STORAGE_STATUS) || 'all';
+  search.value = sessionStorage.getItem(STORAGE_QUERY) || '';
+
+  function matchSearch(p, q) {
+    if (!q) return true;
+    const haystack = [
+      p.name, p.description, p.module, p.manager_name,
+      clientsById[p.client_id]?.name,
+      (p.team || []).map((t) => t.name).join(' '),
+      (p.contacts || []).map((c) => `${c.name} ${c.email}`).join(' '),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return q.split(/\s+/).filter(Boolean).every((term) => haystack.includes(term));
+  }
 
   function render() {
-    const value = filter.value;
-    sessionStorage.setItem(STORAGE_KEY, value);
-    const filtered = value === 'all'
-      ? projects
-      : projects.filter((p) => (p.status || 'in_progress') === value);
+    const statusVal = status.value;
+    const q = search.value.trim().toLowerCase();
+    sessionStorage.setItem(STORAGE_STATUS, statusVal);
+    sessionStorage.setItem(STORAGE_QUERY, q);
 
-    document.getElementById('filterCount').textContent = `${filtered.length} van ${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}`;
+    const filtered = projects.filter((p) => {
+      if (statusVal !== 'all' && (p.status || 'in_progress') !== statusVal) return false;
+      if (!matchSearch(p, q)) return false;
+      return true;
+    });
+
+    document.getElementById('filterCount').textContent =
+      `${filtered.length} van ${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}`;
 
     const content = document.getElementById('content');
     if (filtered.length === 0) {
-      content.innerHTML = '<p class="subtle">Geen projecten met deze status.</p>';
+      content.innerHTML = '<p class="subtle">Geen projecten gevonden.</p>';
       return;
     }
     content.innerHTML = `
       <table class="table">
         <thead><tr>
-          <th>Project</th><th>Status</th><th>PM</th><th>Beschikbaar</th><th>Verbruikt</th><th>%</th><th>Uurtarief</th>
+          <th>Project</th><th>Klant</th><th>Status</th><th>Module</th>
+          <th>PM</th><th>Deadline</th><th>Uren</th><th>%</th>
         </tr></thead>
         <tbody>
           ${filtered.map((p) => {
-            const status = p.status || 'in_progress';
+            const s = p.status || 'in_progress';
+            const clientName = clientsById[p.client_id]?.name || '—';
             return `
               <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
                 <td><strong>${escapeHtml(p.name)}</strong></td>
-                <td><span class="badge status-${status}">${statusLabel(status)}</span></td>
+                <td>${escapeHtml(clientName)}</td>
+                <td><span class="badge status-${s}">${statusLabel(s)}</span></td>
+                <td>${p.module ? `<span class="badge badge-blue">${escapeHtml(p.module)}</span>` : '<span class="subtle">—</span>'}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>
-                <td>${(p.available_hours || 0).toFixed(1)} u</td>
-                <td>${p.hours_used.toFixed(1)} u</td>
+                <td>${p.deadline ? deadlineBadge(p.deadline) : '<span class="subtle">—</span>'}</td>
+                <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
                 <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
-                <td>€ ${(p.hourly_rate || 0).toFixed(2)}</td>
               </tr>`;
           }).join('')}
         </tbody>
@@ -77,7 +113,8 @@
     });
   }
 
-  filter.addEventListener('change', render);
+  status.addEventListener('change', render);
+  search.addEventListener('input', render);
   render();
 </script>
 </body></html>

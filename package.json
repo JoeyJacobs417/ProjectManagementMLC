@@ -13,7 +13,8 @@
     "@anthropic-ai/sdk": "^0.40.0",
     "resend": "^4.0.0",
     "bcryptjs": "^2.4.3",
-    "busboy": "^1.6.0"
+    "busboy": "^1.6.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "engines": {
     "node": ">=20.x"

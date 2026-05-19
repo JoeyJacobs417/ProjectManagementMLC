@@ -9,7 +9,10 @@
   <h1>Dashboard</h1>
   <p class="subtle">Overzicht van alle projecten en hun urenverbruik.</p>
 
-  <h2>Projecten</h2>
+  <h2>Komende deadlines</h2>
+  <div id="deadlines"><p class="subtle">Laden…</p></div>
+
+  <h2 style="margin-top:2rem">Projecten</h2>
   <div id="grid" class="grid"><p class="subtle">Laden…</p></div>
 
   <h2 style="margin-top:2.5rem">Medewerkers</h2>
@@ -17,10 +20,45 @@
   <div id="employees"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, progressBarClass, statusLabel } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, progressBarClass, statusLabel, deadlineBadge, daysFromNow, fmtDate } from '/app.js';
   await renderTopbar('/dashboard.html');
-  const { projects } = await apiGet('/api/projects');
+  const [{ projects }, { settings }] = await Promise.all([
+    apiGet('/api/projects'),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
+  ]);
+  const clientsById = Object.fromEntries((settings.clients || []).map((c) => [c.id, c]));
 
+  // ── Komende deadlines ──────────────────────────────────────────
+  const deadlinesEl = document.getElementById('deadlines');
+  const withDeadline = projects
+    .filter((p) => p.deadline && p.status !== 'done')
+    .map((p) => ({ p, days: daysFromNow(p.deadline) }))
+    .filter((x) => x.days !== null)
+    .sort((a, b) => a.days - b.days)
+    .slice(0, 10);
+  if (withDeadline.length === 0) {
+    deadlinesEl.innerHTML = '<p class="subtle">Geen openstaande deadlines.</p>';
+  } else {
+    deadlinesEl.innerHTML = `
+      <table class="table" style="margin:0">
+        <thead><tr><th>Project</th><th>Klant</th><th>Deadline</th><th>Status</th><th>Uren</th></tr></thead>
+        <tbody>
+          ${withDeadline.map(({ p }) => `
+            <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+              <td><strong>${escapeHtml(p.name)}</strong></td>
+              <td>${escapeHtml(clientsById[p.client_id]?.name || '—')}</td>
+              <td>${deadlineBadge(p.deadline)}</td>
+              <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+              <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+    deadlinesEl.querySelectorAll('tr.clickable').forEach((tr) => {
+      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    });
+  }
+
+  // ── Project cards ──────────────────────────────────────────────
   const grid = document.getElementById('grid');
   if (projects.length === 0) {
     grid.innerHTML = '<p class="subtle">Geen projecten. <a href="/new-project.html">Maak het eerste project aan</a>.</p>';
@@ -32,6 +70,7 @@
       const teamHtml = teamNames.length === 0
         ? '<span class="subtle">geen team toegewezen</span>'
         : teamNames.map((n) => `<span class="badge badge-gray" style="margin-right:.25rem">${n}</span>`).join('');
+      const clientName = clientsById[p.client_id]?.name;
       return `
         <a class="card" href="/project.html?id=${encodeURIComponent(p.id)}">
           <div class="card-header">
@@ -42,7 +81,9 @@
             </div>
             <span class="badge ${percentageBadgeClass(pct)}">${pct}%</span>
           </div>
-          <p class="subtle">${escapeHtml(p.description || '—')}</p>
+          ${clientName ? `<p class="subtle" style="margin:.25rem 0">Klant: ${escapeHtml(clientName)}</p>` : ''}
+          <p class="subtle" style="margin:.25rem 0">${escapeHtml(p.description || '—')}</p>
+          ${p.deadline ? `<div style="margin:.4rem 0">${deadlineBadge(p.deadline)}</div>` : ''}
           <div style="margin:.5rem 0">
             <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.25rem">Team</div>
             <div>${teamHtml}</div>
@@ -58,7 +99,7 @@
     }).join('');
   }
 
-  // Medewerkers
+  // ── Medewerkers ─────────────────────────────────────────────────
   const empMap = new Map();
   for (const p of projects) {
     for (const t of (p.team || [])) {
@@ -80,13 +121,11 @@
 
   const empEl = document.getElementById('employees');
   if (employees.length === 0) {
-    empEl.innerHTML = '<p class="subtle">Nog geen medewerkers toegewezen aan projecten. Wijs ze toe via de project-detail pagina.</p>';
+    empEl.innerHTML = '<p class="subtle">Nog geen medewerkers toegewezen aan projecten.</p>';
   } else {
     empEl.innerHTML = `
       <table class="table">
-        <thead><tr>
-          <th>Medewerker</th><th>Projecten</th><th>Totaal uren</th><th>Binnen budget</th>
-        </tr></thead>
+        <thead><tr><th>Medewerker</th><th>Projecten</th><th>Totaal uren</th><th>Binnen budget</th></tr></thead>
         <tbody>
           ${employees.map((e) => {
             const pctOk = e.hasBudget ? Math.round((e.withinBudget / e.hasBudget) * 100) : null;
