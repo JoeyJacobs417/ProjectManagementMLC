@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Medewerker — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div class="page-header">
+    <div style="flex:1">
+      <h1 id="empName" style="margin:0">Medewerker</h1>
+      <p class="subtle" style="margin:.25rem 0 0" id="empMeta"></p>
+    </div>
+    <div style="display:flex; gap:.5rem">
+      <a class="btn btn-ghost" href="/medewerkers.html">← Medewerkers</a>
+      <a class="btn btn-ghost" href="/planning.html">← Planning</a>
+    </div>
+  </div>
+  <p class="subtle">Alle uren geschreven in Moneybird in de afgelopen 4 weken (inclusief de huidige week), gegroepeerd per Moneybird-project.</p>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, renderTopbar, escapeHtml } from '/app.js';
+  await renderTopbar('/medewerkers.html');
+
+  const params = new URLSearchParams(location.search);
+  const empId = params.get('id');
+  const empNameFromUrl = params.get('name');
+  if (!empId) {
+    document.getElementById('content').innerHTML = '<p>Geen medewerker-ID.</p>';
+    throw new Error('no id');
+  }
+
+  function dateToIso(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+  function fmtDateShort(iso) {
+    const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+    const [y, m, d] = iso.split('-');
+    return `${Number(d)} ${months[Number(m)-1]}`;
+  }
+  function mondayOf(date) {
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
+    const dow = d.getDay();
+    const diff = dow === 0 ? -6 : 1 - dow;
+    d.setDate(d.getDate() + diff);
+    return d;
+  }
+
+  // Periode: huidige week + 3 weken terug → start = ma van (today - 21 dagen)
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const thisMonday = mondayOf(today);
+  const startMonday = new Date(thisMonday); startMonday.setDate(startMonday.getDate() - 21);
+  const sinceIso = dateToIso(startMonday);
+
+  const weekStarts = [];
+  for (let i = 0; i < 4; i++) {
+    const d = new Date(startMonday); d.setDate(d.getDate() + i * 7);
+    weekStarts.push(dateToIso(d));
+  }
+
+  const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}&user_id=${encodeURIComponent(empId)}`;
+  const [{ projects: trackedProjects }, mbResp] = await Promise.all([
+    apiGet('/api/projects').catch(() => ({ projects: [] })),
+    apiGet(mbUrl).catch(() => ({ time_entries: [] })),
+  ]);
+
+  // Map moneybird_project_id → tracked project (voor link en badge)
+  const trackedByMbId = new Map();
+  for (const p of trackedProjects) {
+    if (p.moneybird_project_id) trackedByMbId.set(String(p.moneybird_project_id), p);
+  }
+
+  const entries = (mbResp.time_entries || []).filter((e) => String(e.user_moneybird_id || '') === String(empId));
+
+  // Naam fallback: uit URL → uit eerste entry → 'Onbekend'
+  let empName = empNameFromUrl || '';
+  if (!empName && entries.length > 0) empName = entries[0].user_name || '';
+  if (!empName) empName = 'Onbekend';
+  document.getElementById('empName').textContent = empName;
+  document.title = `${empName} — Projectmanager`;
+
+  // Groepeer per moneybird_project_id
+  const byProject = new Map();
+  for (const e of entries) {
+    if (!e.started_at) continue;
+    const day = String(e.started_at).slice(0, 10);
+    if (day < sinceIso) continue;
+    const pid = e.moneybird_project_id ? String(e.moneybird_project_id) : '__no_project__';
+    const name = e.moneybird_project_name || '(geen project)';
+    if (!byProject.has(pid)) {
+      byProject.set(pid, { pid, name, total: 0, perWeek: new Map(weekStarts.map((w) => [w, 0])), entries: [] });
+    }
+    const rec = byProject.get(pid);
+    const hours = Number(e.hours) || 0;
+    rec.total += hours;
+    rec.entries.push(e);
+    // Vind de juiste week-monday
+    const entryDate = new Date(day);
+    const wMonday = dateToIso(mondayOf(entryDate));
+    if (rec.perWeek.has(wMonday)) rec.perWeek.set(wMonday, rec.perWeek.get(wMonday) + hours);
+  }
+
+  const grouped = Array.from(byProject.values()).sort((a, b) => b.total - a.total);
+  const grandTotal = grouped.reduce((a, g) => a + g.total, 0);
+
+  document.getElementById('empMeta').textContent =
+    `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))}`;
+
+  const c = document.getElementById('content');
+  if (grouped.length === 0) {
+    c.innerHTML = '<p class="subtle">Geen uren geschreven in deze periode.</p>';
+  } else {
+    c.innerHTML = `
+      <table class="table">
+        <thead><tr>
+          <th>Moneybird-project</th>
+          <th>Status</th>
+          ${weekStarts.map((w) => `<th>${fmtDateShort(w)}</th>`).join('')}
+          <th>Totaal</th>
+        </tr></thead>
+        <tbody>
+          ${grouped.map((g) => {
+            const tracked = trackedByMbId.get(g.pid);
+            const nameCell = tracked
+              ? `<a href="/project.html?id=${encodeURIComponent(tracked.id)}"><strong>${escapeHtml(g.name)}</strong></a>`
+              : `<strong>${escapeHtml(g.name)}</strong>`;
+            const statusCell = tracked
+              ? '<span class="badge badge-green">gekoppeld in app</span>'
+              : '<span class="badge badge-gray">niet gekoppeld</span>';
+            const weekCells = weekStarts.map((w) => {
+              const h = g.perWeek.get(w) || 0;
+              return `<td>${h > 0 ? h.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>`;
+            }).join('');
+            return `
+              <tr>
+                <td>${nameCell}</td>
+                <td>${statusCell}</td>
+                ${weekCells}
+                <td><strong>${g.total.toFixed(1)} u</strong></td>
+              </tr>`;
+          }).join('')}
+          <tr style="background:var(--bg-soft)">
+            <td colspan="2"><strong>Totaal</strong></td>
+            ${weekStarts.map((w) => {
+              const weekTotal = grouped.reduce((a, g) => a + (g.perWeek.get(w) || 0), 0);
+              return `<td><strong>${weekTotal.toFixed(1)} u</strong></td>`;
+            }).join('')}
+            <td><strong>${grandTotal.toFixed(1)} u</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  }
+</script>
+</body></html>

@@ -224,6 +224,7 @@
       const periods = vacationsByEmp[e.id] || [];
       const upcoming = periods.filter((p) => p.end >= today);
       const onDashboard = dashboardEmps.has(e.id);
+      const detailHref = `/medewerker.html?id=${encodeURIComponent(e.id)}&name=${encodeURIComponent(e.name)}`;
 
       let estimateHtml = '<span class="subtle">capaciteit niet ingesteld</span>';
       if (cap > 0 && e.totalRemaining > 0) {
@@ -270,7 +271,10 @@
       return `
         <div class="card-static" style="margin-bottom:1.25rem" data-emp-id="${e.id}">
           <div class="card-header" style="margin-bottom:.75rem">
-            <h2 style="margin:0">${escapeHtml(e.name)}</h2>
+            <div>
+              <h2 style="margin:0">${escapeHtml(e.name)}</h2>
+              <a href="${detailHref}" style="font-size:.85rem">→ Uren laatste 4 weken</a>
+            </div>
             <div class="subtle" style="text-align:right">
               <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
               <div><strong>${e.totalRemaining.toFixed(1)}</strong> uur budget resterend</div>
