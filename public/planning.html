@@ -13,7 +13,7 @@
       <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
     </div>
   </div>
-  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum. Inclusief Nederlandse feestdagen.</p>
+  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum. On hold-projecten tellen niet mee voor resterende uren of einddatum. Inclusief Nederlandse feestdagen.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
@@ -32,6 +32,8 @@
   const me = await renderTopbar('/planning.html');
 
   const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
+  // Statussen die meetellen voor 'resterend werk' (on_hold telt NIET mee).
+  const ACTIVE_STATUSES = new Set(['in_progress', 'future']);
   const WEEKS_BACK = 4;
 
   function todayIso() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
@@ -89,6 +91,15 @@
     return null;
   }
 
+  function modulesCell(modules) {
+    if (!modules || modules.length === 0) return '<span class="subtle">—</span>';
+    if (modules.length === 1) {
+      return `<span class="badge badge-blue">${escapeHtml(modules[0])}</span>`;
+    }
+    const list = modules.map(escapeHtml).join(', ');
+    return `<span class="badge badge-blue" title="${list}">PowerSuite</span>`;
+  }
+
   let projects = [], capacities = {}, vacationsByEmp = {};
 
   async function loadAllData() {
@@ -126,7 +137,8 @@
         const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
         rec.rows.push({ project: p, ownHours, remaining });
         rec.totalOwn += ownHours;
-        rec.totalRemaining += remaining;
+        // On hold-projecten tellen niet mee voor 'resterend werk'.
+        if (ACTIVE_STATUSES.has(p.status)) rec.totalRemaining += remaining;
         if (p.status === 'future') rec.newCount += 1;
       }
     }
@@ -278,11 +290,11 @@
             <tbody>
               ${rows.map((row) => {
                 const p = row.project;
-                const mods = (p.modules || []).map((m) => `<span class="badge badge-blue" style="margin-right:.2rem">${escapeHtml(m)}</span>`).join('') || '<span class="subtle">—</span>';
+                const rowStyle = row.remaining === 0 ? ' style="background:rgba(239,68,68,.10)"' : '';
                 return `
-                  <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
+                  <tr class="clickable"${rowStyle} data-id="${encodeURIComponent(p.id)}">
                     <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-                    <td>${mods}</td>
+                    <td>${modulesCell(p.modules)}</td>
                     <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
                     <td>${row.ownHours.toFixed(1)} u</td>
                     <td>${row.remaining.toFixed(1)} u</td>
