@@ -73,8 +73,20 @@ function normalizeMailTemplates(input) {
     if (!t || typeof t !== 'object') continue;
     const subject = String(t.subject || '').trim();
     const body = String(t.body || '').trim();
-    // Sla alleen op als er iets ingevuld is (anders gebruikt notify.js de default)
     if (subject || body) out[key] = { subject, body };
+  }
+  return out;
+}
+
+function normalizeHiddenEmployees(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const id of input) {
+    const v = String(id || '').trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
   }
   return out;
 }
@@ -120,6 +132,7 @@ export default async function handler(req, res) {
     if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
     if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);
     if (b.mail_templates !== undefined) patch.mail_templates = normalizeMailTemplates(b.mail_templates);
+    if (b.hidden_employees !== undefined) patch.hidden_employees = normalizeHiddenEmployees(b.hidden_employees);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;

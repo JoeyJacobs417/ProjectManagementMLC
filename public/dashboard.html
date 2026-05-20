@@ -7,7 +7,7 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <h1>Dashboard</h1>
-  <p class="subtle">Komende deadlines en omzetvoorspelling. Voor meer rapportages: zie <a href="/reports.html">Rapportages</a>. Medewerker-overzicht: <a href="/medewerkers.html">Medewerkers</a>.</p>
+  <p class="subtle">Komende deadlines en omzetvoorspelling. Voor meer rapportages: <a href="/reports.html">Rapportages</a>. Medewerker-overzicht: <a href="/medewerkers.html">Medewerkers</a>.</p>
 
   <h2>Komende deadlines</h2>
   <div id="deadlines"><p class="subtle">Laden…</p></div>
@@ -36,19 +36,43 @@
   <div id="forecast"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, percentageBadgeClass, statusLabel, deadlineBadge, daysFromNow, fmtDate, fmtEuro, isDutchHoliday } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, statusLabel, deadlineBadge, daysFromNow, fmtEuro, isDutchHoliday } from '/app.js';
   await renderTopbar('/dashboard.html');
-  const [{ projects }, { settings }] = await Promise.all([
-    apiGet('/api/projects'),
-    apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [], employee_capacities: {}, employee_vacations: {} } })),
-  ]);
+
+  // Settings
+  const settingsResp = await apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [], employee_capacities: {}, employee_vacations: {} } }));
+  const settings = settingsResp.settings;
   const clientsById = Object.fromEntries((settings.clients || []).map((c) => [c.id, c]));
   const capacities = settings.employee_capacities || {};
   const vacations = settings.employee_vacations || {};
 
-  // Komende deadlines
+  function isoOf(d) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  function isOnVacation(iso, periods) {
+    return (periods || []).some((p) => p.start <= iso && iso <= p.end);
+  }
+  function isUnavailable(d, vacationPeriods) {
+    const iso = isoOf(d);
+    const dow = d.getDay();
+    return dow === 0 || dow === 6 || isOnVacation(iso, vacationPeriods) || isDutchHoliday(iso);
+  }
+  function workdaysInRange(startD, endD, vacationPeriods) {
+    if (startD > endD) return 0;
+    let workdays = 0;
+    const d = new Date(startD);
+    while (d <= endD) {
+      if (!isUnavailable(d, vacationPeriods)) workdays++;
+      d.setDate(d.getDate() + 1);
+    }
+    return workdays;
+  }
+
+  // ── Komende deadlines (geen time entries nodig) ─────────────────
+  const basicResp = await apiGet('/api/projects');
+  const baseProjects = basicResp.projects;
   const deadlinesEl = document.getElementById('deadlines');
-  const withDeadline = projects
+  const withDeadline = baseProjects
     .filter((p) => p.deadline && p.status !== 'done')
     .map((p) => ({ p, days: daysFromNow(p.deadline) }))
     .filter((x) => x.days !== null)
@@ -76,80 +100,96 @@
     });
   }
 
-  function isoOf(d) {
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  }
-  function isOnVacation(iso, periods) {
-    return (periods || []).some((p) => p.start <= iso && iso <= p.end);
-  }
-  function isUnavailable(d, vacationPeriods) {
-    const iso = isoOf(d);
-    const dow = d.getDay();
-    return dow === 0 || dow === 6 || isOnVacation(iso, vacationPeriods) || isDutchHoliday(iso);
-  }
-  function workdaysInMonth(year, monthIdx0, vacationPeriods) {
-    const first = new Date(year, monthIdx0, 1);
-    const last = new Date(year, monthIdx0 + 1, 0);
-    const today = new Date(); today.setHours(0,0,0,0);
-    let d = new Date(first); let workdays = 0;
-    while (d <= last) {
-      if (d >= today && !isUnavailable(d, vacationPeriods)) workdays++;
-      d.setDate(d.getDate() + 1);
-    }
-    return workdays;
-  }
-
+  // ── Forecast setup ─────────────────────────────────────────────
   const periodSel = document.getElementById('forecastPeriod');
   const monthInput = document.getElementById('forecastMonth');
   const monthWrap = document.getElementById('monthPickerWrap');
   const STORAGE_PERIOD = 'pm_forecast_period';
   const STORAGE_MONTH = 'pm_forecast_month';
-
-  // Default: huidige maand
   const now = new Date();
   const currentMonthIso = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   monthInput.value = sessionStorage.getItem(STORAGE_MONTH) || currentMonthIso;
   periodSel.value = sessionStorage.getItem(STORAGE_PERIOD) || 'month';
 
-  function getPeriodHoursForEmployee(empId) {
-    const cap = Number(capacities[empId]) || 0;
-    if (cap <= 0) return { hours: Infinity, label: '∞' };
-    const choice = periodSel.value;
-    const empVacations = vacations[empId] || [];
-    if (choice.startsWith('weeks-')) {
-      const weeks = Number(choice.split('-')[1]);
-      const today = new Date(); today.setHours(0,0,0,0);
-      const end = new Date(today); end.setDate(end.getDate() + weeks * 7);
-      let workdays = 0;
-      const d = new Date(today);
-      while (d < end) {
-        if (!isUnavailable(d, empVacations)) workdays++;
-        d.setDate(d.getDate() + 1);
-      }
-      return { hours: (cap / 5) * workdays, label: `${weeks}w (${workdays} werkdagen)` };
-    }
-    if (choice === 'month') {
-      const mv = monthInput.value || '';
-      const [y, m] = mv.split('-').map(Number);
-      if (!y || !m) return { hours: 0, label: 'geen maand' };
-      const workdays = workdaysInMonth(y, m - 1, empVacations);
-      return { hours: (cap / 5) * workdays, label: `${workdays} werkdagen` };
-    }
-    return { hours: Infinity, label: '∞' };
+  // Voor month-mode laden we time entries van die maand zodat past hours kloppen
+  let projectsWithEntries = null;
+  let loadedMonthKey = null;
+
+  async function ensureProjectsForMonth(monthIso) {
+    if (loadedMonthKey === monthIso && projectsWithEntries) return projectsWithEntries;
+    const r = await apiGet(`/api/projects?with_time_entries=1&time_entries_in_month=${encodeURIComponent(monthIso)}`);
+    projectsWithEntries = r.projects;
+    loadedMonthKey = monthIso;
+    return projectsWithEntries;
   }
 
-  function renderForecast() {
+  function statsForMonth(projects, monthIso) {
+    // Past hours per (empId, project): som van time entries in die maand t/m vandaag
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayIso = isoOf(today);
+    const map = new Map(); // key: empId → { hoursByProject: Map<projectId, hours>, total }
+    for (const p of projects) {
+      for (const e of (p.time_entries || [])) {
+        if (!e.user_moneybird_id || !e.started_at) continue;
+        const day = String(e.started_at).slice(0, 10);
+        if (!day.startsWith(monthIso)) continue;
+        if (day > todayIso) continue; // tellen alleen tot vandaag
+        if (!map.has(e.user_moneybird_id)) map.set(e.user_moneybird_id, { hoursByProject: new Map(), total: 0 });
+        const rec = map.get(e.user_moneybird_id);
+        rec.hoursByProject.set(p.id, (rec.hoursByProject.get(p.id) || 0) + (Number(e.hours) || 0));
+        rec.total += Number(e.hours) || 0;
+      }
+    }
+    return map;
+  }
+
+  function getFutureWorkdaysInMonth(monthIso, empVacations) {
+    const [y, m] = monthIso.split('-').map(Number);
+    const firstDay = new Date(y, m - 1, 1);
+    const lastDay = new Date(y, m, 0);
+    const tomorrow = new Date(); tomorrow.setHours(0,0,0,0); tomorrow.setDate(tomorrow.getDate() + 1);
+    const start = tomorrow > firstDay ? tomorrow : firstDay;
+    return workdaysInRange(start, lastDay, empVacations);
+  }
+
+  function getFutureWorkdaysInWeeks(weeks, empVacations) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+    const end = new Date(today); end.setDate(end.getDate() + weeks * 7 - 1);
+    return workdaysInRange(tomorrow, end, empVacations);
+  }
+
+  async function renderForecast() {
     sessionStorage.setItem(STORAGE_PERIOD, periodSel.value);
     sessionStorage.setItem(STORAGE_MONTH, monthInput.value || '');
     monthWrap.style.display = periodSel.value === 'month' ? '' : 'none';
 
+    const isMonth = periodSel.value === 'month';
+    const monthIso = monthInput.value || currentMonthIso;
+
+    // Voor month-mode: zorg dat we time entries van die maand hebben.
+    // Voor weeks-mode: gebruik baseProjects (geen entries nodig).
+    let projects = baseProjects;
+    let pastByEmp = new Map();
+    if (isMonth) {
+      try {
+        projects = await ensureProjectsForMonth(monthIso);
+        pastByEmp = statsForMonth(projects, monthIso);
+      } catch (err) {
+        // Stilletjes: fallback op baseProjects zonder past hours
+        projects = baseProjects;
+        pastByEmp = new Map();
+      }
+    }
+
     const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future');
+
+    // Per persoon: future-forecast = pro-rata remaining hours × rate
     const perPerson = new Map();
-    let grandTotal = 0;
     for (const p of inProgress) {
       const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
       const rate = Number(p.hourly_rate) || 0;
-      if (remaining <= 0 || rate <= 0 || !p.team || p.team.length === 0) continue;
+      if (rate <= 0 || !p.team || p.team.length === 0) continue;
       const totalProjectHoursUsed = (p.team_stats || []).reduce((a, s) => a + (Number(s.hours) || 0), 0);
       for (const member of p.team) {
         const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === member.moneybird_user_id);
@@ -157,48 +197,103 @@
         const shareRatio = totalProjectHoursUsed > 0
           ? (memberHours / totalProjectHoursUsed)
           : (1 / p.team.length);
-        const estRemainingHours = shareRatio * remaining;
+        const estRemainingHours = remaining > 0 ? shareRatio * remaining : 0;
         if (!perPerson.has(member.moneybird_user_id)) {
           perPerson.set(member.moneybird_user_id, {
             id: member.moneybird_user_id, name: member.name,
-            projectBreakdown: [], rawHours: 0,
+            futureBreakdown: [], futureRawHours: 0,
+            pastHours: 0, pastRevenue: 0,
           });
         }
         const rec = perPerson.get(member.moneybird_user_id);
-        rec.projectBreakdown.push({ project: p, hours: estRemainingHours, rate });
-        rec.rawHours += estRemainingHours;
+        rec.futureBreakdown.push({ project: p, hours: estRemainingHours, rate });
+        rec.futureRawHours += estRemainingHours;
       }
     }
 
+    // Voor month-mode: voeg past hours in (kan ook voor personen die niet op een team zitten — dan vallen ze nu uit het overzicht, dus we voegen ze toe)
+    if (isMonth) {
+      // Map project-id naar project (voor rate-lookup)
+      const projectById = new Map(projects.map((p) => [p.id, p]));
+      for (const [empId, pastRec] of pastByEmp.entries()) {
+        if (!perPerson.has(empId)) {
+          // Persoon staat niet (meer) op een team van in_progress/future project, maar heeft wel uren geschreven
+          // Probeer naam te vinden uit historische team-toewijzingen
+          let name = 'Onbekend';
+          for (const p of projects) {
+            const t = (p.team || []).find((x) => x.moneybird_user_id === empId);
+            if (t) { name = t.name; break; }
+          }
+          perPerson.set(empId, {
+            id: empId, name,
+            futureBreakdown: [], futureRawHours: 0,
+            pastHours: 0, pastRevenue: 0,
+          });
+        }
+        const rec = perPerson.get(empId);
+        let pastHrs = 0;
+        let pastRev = 0;
+        for (const [pid, hrs] of pastRec.hoursByProject.entries()) {
+          const proj = projectById.get(pid);
+          const rate = proj ? Number(proj.hourly_rate) || 0 : 0;
+          pastHrs += hrs;
+          pastRev += hrs * rate;
+        }
+        rec.pastHours = pastHrs;
+        rec.pastRevenue = pastRev;
+      }
+    }
+
+    let grandTotal = 0;
     const rows = [];
     for (const rec of perPerson.values()) {
       const cap = Number(capacities[rec.id]) || 0;
-      const { hours: maxHoursInPeriod, label: periodLabel } = getPeriodHoursForEmployee(rec.id);
-      const factor = rec.rawHours > maxHoursInPeriod ? maxHoursInPeriod / rec.rawHours : 1;
-      let cappedHours = 0; let cappedRevenue = 0;
-      for (const b of rec.projectBreakdown) {
-        const h = b.hours * factor;
-        cappedHours += h;
-        cappedRevenue += h * b.rate;
+      const empVacations = vacations[rec.id] || [];
+
+      let maxFutureHours = Infinity;
+      let periodLabel = '∞';
+      if (isMonth) {
+        const futWd = getFutureWorkdaysInMonth(monthIso, empVacations);
+        periodLabel = cap > 0 ? `${futWd} werkdagen resterend` : `${futWd} werkdagen resterend (geen capaciteit)`;
+        if (cap > 0) maxFutureHours = (cap / 5) * futWd;
+      } else if (periodSel.value.startsWith('weeks-')) {
+        const weeks = Number(periodSel.value.split('-')[1]);
+        const futWd = getFutureWorkdaysInWeeks(weeks, empVacations);
+        periodLabel = cap > 0 ? `${weeks}w (${futWd} werkdagen)` : `${weeks}w (${futWd} werkdagen, geen capaciteit)`;
+        if (cap > 0) maxFutureHours = (cap / 5) * futWd;
       }
-      grandTotal += cappedRevenue;
+
+      const factor = rec.futureRawHours > maxFutureHours ? maxFutureHours / rec.futureRawHours : 1;
+      let futureHours = 0;
+      let futureRevenue = 0;
+      for (const b of rec.futureBreakdown) {
+        const h = b.hours * factor;
+        futureHours += h;
+        futureRevenue += h * b.rate;
+      }
+
+      const pastHours = isMonth ? rec.pastHours : 0;
+      const pastRevenue = isMonth ? rec.pastRevenue : 0;
+      const totalHours = pastHours + futureHours;
+      const totalRevenue = pastRevenue + futureRevenue;
+      if (totalRevenue === 0 && totalHours === 0) continue;
+      grandTotal += totalRevenue;
       rows.push({
         name: rec.name, cap: cap > 0 ? cap : null,
-        cappedHours, cappedRevenue, capped: factor < 1, periodLabel,
+        pastHours, futureHours, totalHours,
+        pastRevenue, futureRevenue, totalRevenue,
+        capped: factor < 1, periodLabel,
       });
     }
-    rows.sort((a, b) => b.cappedRevenue - a.cappedRevenue);
+    rows.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
-    const periodDesc = periodSel.value === 'month'
-      ? `maand ${monthInput.value || '—'}`
-      : `komende ${periodSel.value.split('-')[1]} weken`;
-
+    const periodDesc = isMonth ? `maand ${monthIso}` : `komende ${periodSel.value.split('-')[1]} weken`;
     document.getElementById('forecastTotal').innerHTML =
       ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong>`;
 
     const el = document.getElementById('forecast');
     if (rows.length === 0) {
-      el.innerHTML = '<p class="subtle">Geen actieve projecten met team om voorspelling op te baseren.</p>';
+      el.innerHTML = '<p class="subtle">Geen actieve projecten of geen gewerkte uren in deze periode.</p>';
       return;
     }
     el.innerHTML = `
@@ -206,8 +301,9 @@
         <thead><tr>
           <th>Medewerker</th>
           <th>Capaciteit</th>
-          <th>Werkbare uren in periode</th>
-          <th>Geschatte uren</th>
+          ${isMonth ? '<th>Reeds gewerkt</th>' : ''}
+          <th>Werkbare uren ${isMonth ? '(rest van maand)' : 'in periode'}</th>
+          <th>${isMonth ? 'Totaal uren' : 'Geschatte uren'}</th>
           <th>Verwachte omzet</th>
         </tr></thead>
         <tbody>
@@ -215,14 +311,21 @@
             <tr>
               <td><strong>${escapeHtml(r.name)}</strong></td>
               <td>${r.cap !== null ? r.cap + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
+              ${isMonth ? `<td>${r.pastHours.toFixed(1)} u <span class="subtle">(${fmtEuro(r.pastRevenue)})</span></td>` : ''}
               <td><span class="subtle">${escapeHtml(r.periodLabel)}</span></td>
-              <td>${r.cappedHours.toFixed(1)} u${r.capped ? ' <span class="subtle">(capped)</span>' : ''}</td>
-              <td><strong>${fmtEuro(r.cappedRevenue)}</strong></td>
+              <td>
+                ${isMonth
+                  ? `${r.totalHours.toFixed(1)} u <span class="subtle">(waarvan ${r.futureHours.toFixed(1)} u nog te doen${r.capped ? ', capped' : ''})</span>`
+                  : `${r.futureHours.toFixed(1)} u${r.capped ? ' <span class="subtle">(capped)</span>' : ''}`}
+              </td>
+              <td><strong>${fmtEuro(r.totalRevenue)}</strong></td>
             </tr>`).join('')}
         </tbody>
       </table>
       <p class="subtle" style="margin-top:.5rem">
-        Werkbare uren = (capaciteit ÷ 5) × werkdagen in de periode, exclusief weekenden, vakantiedagen en Nederlandse feestdagen.
+        ${isMonth
+          ? `<strong>Maand-modus:</strong> reeds gewerkte uren in ${monthIso} (uit Moneybird) + geschatte resterende uren (op basis van capaciteit × resterende werkdagen, exclusief weekenden/vakantie/feestdagen, pro-rata verdeeld over teamleden).`
+          : 'Werkbare uren = (capaciteit ÷ 5) × werkdagen in de periode, exclusief weekenden, vakantiedagen en Nederlandse feestdagen.'}
       </p>
     `;
   }

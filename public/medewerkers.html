@@ -3,6 +3,12 @@
 <meta charset="utf-8"><title>Medewerkers — Projectmanager</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<style>
+  th[data-sort] { cursor: pointer; user-select: none; }
+  th[data-sort]:hover { background: var(--bg-soft); }
+  th .sort-arrow { display: inline-block; margin-left: .25rem; opacity: .5; font-size: .75em; }
+  th[data-sort].active .sort-arrow { opacity: 1; }
+</style>
 </head><body>
 <header class="topbar" id="topbar"></header>
 <main class="container">
@@ -10,13 +16,18 @@
     <h1>Medewerkers</h1>
     <span class="subtle" id="countLabel"></span>
   </div>
-  <p class="subtle">Overzicht per medewerker: capaciteit (uren/week), prestaties op toegewezen projecten, en declarabiliteit. Capaciteit is alleen aan te passen door admins.</p>
+  <p class="subtle">Capaciteit, prestaties en declarabiliteit per medewerker. Klik op een kolom om te sorteren. Admins kunnen capaciteiten aanpassen en medewerkers verbergen die niet relevant zijn (bv. marketing).</p>
 
   <div id="content"><p class="subtle">Laden…</p></div>
 
+  <div id="hiddenSection" class="hidden" style="margin-top:1rem">
+    <a href="#" id="toggleHidden" class="subtle">Toon verborgen medewerkers</a>
+    <div id="hiddenList" class="hidden" style="margin-top:.5rem"></div>
+  </div>
+
   <div class="card-static hidden" id="capacityCard" style="margin-top:1.5rem">
     <h3 style="margin-top:0">Capaciteit aanpassen</h3>
-    <p class="subtle" style="margin-top:-.4rem">Aantal uren per week dat een medewerker beschikbaar is. Gebruikt op de Planning-pagina en in de omzetvoorspelling.</p>
+    <p class="subtle" style="margin-top:-.4rem">Aantal uren per week dat een medewerker beschikbaar is.</p>
     <form id="capForm" class="form">
       <div id="capGrid"></div>
       <div style="margin-top:1rem"><button class="btn btn-primary" type="submit">Capaciteiten opslaan</button></div>
@@ -28,14 +39,17 @@
   const me = await renderTopbar('/medewerkers.html');
   const isAdmin = me?.role === 'admin';
 
-  const [{ projects }, { settings }, { employees: mbEmployees }] = await Promise.all([
+  const [{ projects }, settingsResp, mbEmpResp] = await Promise.all([
     apiGet('/api/projects'),
-    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {} } })),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, hidden_employees: [] } })),
     apiGet('/api/moneybird/employees').catch(() => ({ employees: [] })),
   ]);
-  const capacities = settings.employee_capacities || {};
+  const settings = settingsResp.settings;
+  let capacities = settings.employee_capacities || {};
+  let hiddenIds = new Set(settings.hidden_employees || []);
+  const mbEmployees = mbEmpResp.employees || [];
 
-  // Bouw map van alle medewerkers (uit Moneybird + uit projects teams)
+  // Bouw medewerker-lijst
   const empMap = new Map();
   for (const e of mbEmployees) {
     empMap.set(e.id, { id: e.id, name: e.name, email: e.email || '', projects: [], totalHours: 0, billable: 0, withinBudget: 0, hasBudget: 0 });
@@ -48,11 +62,6 @@
       const rec = empMap.get(t.moneybird_user_id);
       const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === t.moneybird_user_id);
       const myHours = stat ? Number(stat.hours) || 0 : 0;
-
-      // Declarabiliteit per project:
-      // - Project zonder budget: alle uren tellen als declarabel
-      // - Project met budget: capRatio = min(1, budget / totaalUrenOpProject)
-      //   billable_voor_deze_persoon = myHours * capRatio
       const projectTotalUsed = (p.team_stats || []).reduce((a, s) => a + (Number(s.hours) || 0), 0);
       const budget = Number(p.available_hours) || 0;
       let projBillable = myHours;
@@ -60,7 +69,6 @@
         const capRatio = Math.min(1, budget / projectTotalUsed);
         projBillable = myHours * capRatio;
       }
-
       rec.projects.push({ project: p, myHours, projBillable });
       rec.totalHours += myHours;
       rec.billable += projBillable;
@@ -71,71 +79,182 @@
     }
   }
 
-  // Verberg medewerkers zonder toegewezen projecten EN zonder capaciteit-instelling én zonder Moneybird-koppeling
-  // Maar laat ze wel zien als ze in Moneybird voorkomen (anders kan admin geen capaciteit instellen)
-  const employees = Array.from(empMap.values()).sort((a, b) => b.totalHours - a.totalHours);
+  // Verrijken met afgeleiden voor sortering
+  for (const e of empMap.values()) {
+    e.capacity = Number(capacities[e.id]) || 0;
+    e.projectCount = e.projects.length;
+    e.declarabilityPct = e.totalHours > 0 ? (e.billable / e.totalHours) * 100 : null;
+    e.withinBudgetPct = e.hasBudget ? (e.withinBudget / e.hasBudget) * 100 : null;
+  }
+  const allEmployees = Array.from(empMap.values());
 
-  document.getElementById('countLabel').textContent = `${employees.length} medewerker${employees.length === 1 ? '' : 's'}`;
+  document.getElementById('countLabel').textContent = `${allEmployees.length} medewerker${allEmployees.length === 1 ? '' : 's'}${hiddenIds.size ? ` · ${hiddenIds.size} verborgen` : ''}`;
 
-  // Hoofdtabel
-  const c = document.getElementById('content');
-  if (employees.length === 0) {
-    c.innerHTML = '<p class="subtle">Nog geen medewerkers gevonden. Synchroniseer een Moneybird-project of wijs medewerkers toe aan projecten.</p>';
-  } else {
-    c.innerHTML = `
-      <table class="table">
-        <thead><tr>
-          <th>Medewerker</th>
-          <th>Capaciteit</th>
-          <th>Projecten toegewezen</th>
-          <th>Uren geschreven</th>
-          <th>Declarabele uren</th>
-          <th>Declarabiliteit</th>
-          <th>Binnen budget</th>
-        </tr></thead>
-        <tbody>
-          ${employees.map((e) => {
-            const cap = Number(capacities[e.id]) || 0;
-            const decl = e.totalHours > 0 ? (e.billable / e.totalHours) * 100 : null;
-            const declBadge = decl === null ? '<span class="subtle">—</span>' :
-              `<span class="badge ${decl >= 90 ? 'badge-green' : decl >= 70 ? 'badge-orange' : 'badge-red'}">${decl.toFixed(1)}%</span>`;
-            const wbPct = e.hasBudget ? Math.round((e.withinBudget / e.hasBudget) * 100) : null;
-            const wbBadge = wbPct === null ? '—' :
-              `<span class="badge ${wbPct >= 80 ? 'badge-green' : wbPct >= 50 ? 'badge-orange' : 'badge-red'}">${e.withinBudget}/${e.hasBudget} (${wbPct}%)</span>`;
-            return `
-              <tr>
-                <td><strong>${escapeHtml(e.name)}</strong>${e.email ? `<br><span class="subtle" style="font-size:.8rem">${escapeHtml(e.email)}</span>` : ''}</td>
-                <td>${cap > 0 ? cap + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
-                <td>${e.projects.length}</td>
-                <td>${e.totalHours.toFixed(1)} u</td>
-                <td>${e.billable.toFixed(1)} u</td>
-                <td>${declBadge}</td>
-                <td>${wbBadge}</td>
-              </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-      <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
-        <strong>Declarabiliteit</strong> = aandeel van geschreven uren dat binnen het projectbudget valt. Schrijft een teamlid 40 uur op een project met 30 uur budget waar het hele team 60 uur op heeft geschreven, dan zijn (40 × 30/60) = 20 uur declarabel.
-      </p>
-    `;
+  // ── Sortering ──────────────────────────────────────────────────
+  const SORT_KEY_STORAGE = 'pm_emp_sort_key';
+  const SORT_DIR_STORAGE = 'pm_emp_sort_dir';
+  let sortKey = sessionStorage.getItem(SORT_KEY_STORAGE) || 'totalHours';
+  let sortDir = Number(sessionStorage.getItem(SORT_DIR_STORAGE)) || -1; // -1 = desc, 1 = asc
+
+  function compareEmployees(a, b) {
+    const va = a[sortKey];
+    const vb = b[sortKey];
+    // null/undefined gaan naar einde (bij desc beneden, bij asc beneden ook)
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') return sortDir * va.localeCompare(vb, 'nl');
+    return sortDir * (va - vb);
   }
 
-  // Capaciteit-card (admin only)
-  if (isAdmin && employees.length > 0) {
+  function sortIndicator(key) {
+    if (sortKey !== key) return '<span class="sort-arrow">↕</span>';
+    return `<span class="sort-arrow">${sortDir === -1 ? '▼' : '▲'}</span>`;
+  }
+
+  function renderTable() {
+    const visible = allEmployees.filter((e) => !hiddenIds.has(e.id));
+    visible.sort(compareEmployees);
+
+    const c = document.getElementById('content');
+    if (visible.length === 0) {
+      c.innerHTML = '<p class="subtle">Geen zichtbare medewerkers. ' + (hiddenIds.size ? 'Maak verborgen medewerkers weer zichtbaar via de link hieronder.' : '') + '</p>';
+    } else {
+      c.innerHTML = `
+        <table class="table">
+          <thead><tr>
+            <th data-sort="name" class="${sortKey === 'name' ? 'active' : ''}">Medewerker ${sortIndicator('name')}</th>
+            <th data-sort="capacity" class="${sortKey === 'capacity' ? 'active' : ''}">Capaciteit ${sortIndicator('capacity')}</th>
+            <th data-sort="projectCount" class="${sortKey === 'projectCount' ? 'active' : ''}">Projecten ${sortIndicator('projectCount')}</th>
+            <th data-sort="totalHours" class="${sortKey === 'totalHours' ? 'active' : ''}">Uren geschreven ${sortIndicator('totalHours')}</th>
+            <th data-sort="billable" class="${sortKey === 'billable' ? 'active' : ''}">Declarabele uren ${sortIndicator('billable')}</th>
+            <th data-sort="declarabilityPct" class="${sortKey === 'declarabilityPct' ? 'active' : ''}">Declarabiliteit ${sortIndicator('declarabilityPct')}</th>
+            <th data-sort="withinBudgetPct" class="${sortKey === 'withinBudgetPct' ? 'active' : ''}">Binnen budget ${sortIndicator('withinBudgetPct')}</th>
+            ${isAdmin ? '<th></th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${visible.map((e) => {
+              const declBadge = e.declarabilityPct === null ? '<span class="subtle">—</span>' :
+                `<span class="badge ${e.declarabilityPct >= 90 ? 'badge-green' : e.declarabilityPct >= 70 ? 'badge-orange' : 'badge-red'}">${e.declarabilityPct.toFixed(1)}%</span>`;
+              const wbBadge = e.withinBudgetPct === null ? '—' :
+                `<span class="badge ${e.withinBudgetPct >= 80 ? 'badge-green' : e.withinBudgetPct >= 50 ? 'badge-orange' : 'badge-red'}">${e.withinBudget}/${e.hasBudget} (${Math.round(e.withinBudgetPct)}%)</span>`;
+              return `
+                <tr>
+                  <td><strong>${escapeHtml(e.name)}</strong>${e.email ? `<br><span class="subtle" style="font-size:.8rem">${escapeHtml(e.email)}</span>` : ''}</td>
+                  <td>${e.capacity > 0 ? e.capacity + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
+                  <td>${e.projectCount}</td>
+                  <td>${e.totalHours.toFixed(1)} u</td>
+                  <td>${e.billable.toFixed(1)} u</td>
+                  <td>${declBadge}</td>
+                  <td>${wbBadge}</td>
+                  ${isAdmin ? `<td><button class="btn btn-ghost" type="button" data-hide="${e.id}" style="font-size:.8rem; padding:.25rem .5rem">Verberg</button></td>` : ''}
+                </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+        <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
+          <strong>Declarabiliteit</strong> = aandeel uren binnen projectbudget. Een teamlid dat 40 uur schrijft op een project van 30 uur budget waar het team in totaal 60 uur op heeft geschreven, heeft (40 × 30/60) = 20 declarabele uren = 50% declarabiliteit.
+        </p>
+      `;
+
+      // Sort headers
+      for (const th of c.querySelectorAll('th[data-sort]')) {
+        th.onclick = () => {
+          const key = th.dataset.sort;
+          if (sortKey === key) sortDir = -sortDir;
+          else { sortKey = key; sortDir = (key === 'name' ? 1 : -1); }
+          sessionStorage.setItem(SORT_KEY_STORAGE, sortKey);
+          sessionStorage.setItem(SORT_DIR_STORAGE, String(sortDir));
+          renderTable();
+        };
+      }
+
+      // Hide buttons
+      for (const btn of c.querySelectorAll('button[data-hide]')) {
+        btn.onclick = async () => {
+          const id = btn.dataset.hide;
+          const emp = allEmployees.find((e) => e.id === id);
+          if (!confirm(`"${emp?.name || 'deze medewerker'}" verbergen?`)) return;
+          hiddenIds.add(id);
+          await saveHidden();
+        };
+      }
+    }
+
+    // Hidden section
+    updateHiddenSection();
+    renderCapacityCard();
+  }
+
+  function updateHiddenSection() {
+    const wrap = document.getElementById('hiddenSection');
+    const list = document.getElementById('hiddenList');
+    const toggle = document.getElementById('toggleHidden');
+
+    if (hiddenIds.size === 0) {
+      wrap.classList.add('hidden');
+      return;
+    }
+    wrap.classList.remove('hidden');
+    toggle.textContent = list.classList.contains('hidden')
+      ? `Toon ${hiddenIds.size} verborgen medewerker${hiddenIds.size === 1 ? '' : 's'}`
+      : `Verberg deze lijst`;
+
+    const hiddenEmps = allEmployees.filter((e) => hiddenIds.has(e.id));
+    list.innerHTML = `
+      <div class="card-static" style="margin-bottom:.5rem; padding:.75rem 1rem">
+        <strong>Verborgen medewerkers</strong>
+        <ul style="margin:.5rem 0; padding-left:1.2rem">
+          ${hiddenEmps.map((e) => `
+            <li style="margin:.25rem 0">
+              ${escapeHtml(e.name)}${e.email ? ` <span class="subtle">(${escapeHtml(e.email)})</span>` : ''}
+              ${isAdmin ? `<a href="#" data-unhide="${e.id}" style="margin-left:.5rem">Toon weer</a>` : ''}
+            </li>`).join('')}
+        </ul>
+      </div>`;
+    for (const link of list.querySelectorAll('a[data-unhide]')) {
+      link.onclick = async (ev) => {
+        ev.preventDefault();
+        hiddenIds.delete(link.dataset.unhide);
+        await saveHidden();
+      };
+    }
+
+    toggle.onclick = (ev) => {
+      ev.preventDefault();
+      list.classList.toggle('hidden');
+      updateHiddenSection();
+    };
+  }
+
+  async function saveHidden() {
+    try {
+      await apiSend('/api/admin/settings', 'POST', { hidden_employees: Array.from(hiddenIds) });
+      toast('Verborgen lijst bijgewerkt', 'success');
+      document.getElementById('countLabel').textContent = `${allEmployees.length} medewerker${allEmployees.length === 1 ? '' : 's'}${hiddenIds.size ? ` · ${hiddenIds.size} verborgen` : ''}`;
+      renderTable();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
+  function renderCapacityCard() {
+    if (!isAdmin) return;
+    const visible = allEmployees.filter((e) => !hiddenIds.has(e.id));
+    if (visible.length === 0) return;
     document.getElementById('capacityCard').classList.remove('hidden');
     document.getElementById('capGrid').innerHTML = `
       <table class="table" style="margin:0">
         <thead><tr><th>Medewerker</th><th style="width:160px">Uur per week</th></tr></thead>
         <tbody>
-          ${employees.map((e) => `
+          ${visible.map((e) => `
             <tr>
               <td>${escapeHtml(e.name)}</td>
               <td><input type="number" step="0.5" min="0" data-cap-id="${e.id}" value="${capacities[e.id] ?? ''}" placeholder="bv. 40"></td>
             </tr>`).join('')}
         </tbody>
       </table>`;
+  }
 
+  if (isAdmin) {
     document.getElementById('capForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const newCaps = {};
@@ -148,9 +267,18 @@
       }
       try {
         await apiSend('/api/admin/settings', 'POST', { employee_capacities: newCaps });
+        capacities = newCaps;
+        for (const e of allEmployees) e.capacity = Number(newCaps[e.id]) || 0;
         toast('Capaciteiten opgeslagen', 'success');
+        renderTable();
       } catch (err) { toast(err.message, 'error'); }
     });
+  }
+
+  if (allEmployees.length === 0) {
+    document.getElementById('content').innerHTML = '<p class="subtle">Nog geen medewerkers gevonden. Synchroniseer een Moneybird-project of wijs medewerkers toe aan projecten.</p>';
+  } else {
+    renderTable();
   }
 </script>
 </body></html>
