@@ -10,7 +10,6 @@
   <div class="page-header">
     <h1>Planning</h1>
     <div style="display:flex; gap:.5rem">
-      <button class="btn btn-ghost" id="refreshBtn" title="Vernieuw Moneybird-uren (omzeilt cache)">↻ Vernieuw</button>
       <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
     </div>
   </div>
@@ -23,7 +22,6 @@
         <option value="all">Alle medewerkers</option>
       </select>
       <span class="subtle" id="filterCount"></span>
-      <span class="subtle" id="cacheStatus" style="margin-left:auto"></span>
     </label>
   </div>
 
@@ -91,55 +89,23 @@
     return null;
   }
 
-  let projects = [], capacities = {}, vacationsByEmp = {}, allMoneybirdEntries = [];
-  let trackedMoneybirdIds = new Set();
-  let mbCacheStatus = '';
+  let projects = [], capacities = {}, vacationsByEmp = {};
 
-  function fourWeeksAgoIso() {
-    const d = new Date(); d.setHours(0,0,0,0);
-    d.setDate(d.getDate() - WEEKS_BACK * 7);
-    return dateToIso(d);
-  }
-
-  async function loadAllData(refresh = false) {
+  async function loadAllData() {
     document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
-    document.getElementById('cacheStatus').textContent = '';
 
-    const sinceDate = new Date();
-    sinceDate.setDate(sinceDate.getDate() - (WEEKS_BACK + 1) * 7);
-    const sinceIso = sinceDate.toISOString().slice(0, 10);
-
-    const mbUrl = `/api/moneybird/time_entries?since=${sinceIso}${refresh ? '&nocache=1' : ''}`;
-    // BELANGRIJK: gebruik planning_view=1 voor véél kleinere payload
-    const [projResp, settingsResp, mbResp] = await Promise.all([
+    const [projResp, settingsResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
       apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
-      fetch(mbUrl, { credentials: 'same-origin' }).then(async (r) => {
-        mbCacheStatus = r.headers.get('X-Cache') || '';
-        return r.json().catch(() => ({ time_entries: [] }));
-      }).catch(() => ({ time_entries: [] })),
     ]);
 
     projects = projResp.projects;
     capacities = settingsResp.settings.employee_capacities || {};
     vacationsByEmp = settingsResp.settings.employee_vacations || {};
-    allMoneybirdEntries = mbResp.time_entries || [];
-    trackedMoneybirdIds = new Set(
-      projects.map((p) => p.moneybird_project_id).filter(Boolean).map(String)
-    );
-
-    if (mbCacheStatus === 'HIT') document.getElementById('cacheStatus').textContent = '✓ Moneybird uit cache';
-    else if (mbCacheStatus === 'MISS') document.getElementById('cacheStatus').textContent = '✓ Moneybird fresh fetch';
 
     rebuildEmployees();
     render();
   }
-
-  document.getElementById('refreshBtn').onclick = async () => {
-    toast('Moneybird-uren vernieuwen…', 'info');
-    await loadAllData(true);
-    toast('Vernieuwd', 'success');
-  };
 
   let employees = [];
   const isAdmin = me?.role === 'admin';
@@ -182,7 +148,7 @@
       d.setDate(d.getDate() - 7 * i);
       weekStarts.push(dateToIso(d));
     }
-    const weekMap = new Map(weekStarts.map((w) => [w, { perTracked: new Map(), other: new Map(), otherTotal: 0 }]));
+    const weekMap = new Map(weekStarts.map((w) => [w, { perTracked: new Map() }]));
 
     for (const p of projects) {
       for (const e of (p.time_entries || [])) {
@@ -192,16 +158,6 @@
         const cur = weekMap.get(monday).perTracked;
         cur.set(p.id, (cur.get(p.id) || 0) + (Number(e.hours) || 0));
       }
-    }
-    for (const e of allMoneybirdEntries) {
-      if (e.user_moneybird_id !== empId || !e.started_at) continue;
-      if (e.moneybird_project_id && trackedMoneybirdIds.has(String(e.moneybird_project_id))) continue;
-      const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0,10))));
-      if (!weekMap.has(monday)) continue;
-      const bucket = weekMap.get(monday).other;
-      const mbName = e.moneybird_project_name || '(geen project)';
-      bucket.set(mbName, (bucket.get(mbName) || 0) + (Number(e.hours) || 0));
-      weekMap.get(monday).otherTotal += (Number(e.hours) || 0);
     }
 
     return weekStarts.map((w) => {
@@ -214,28 +170,9 @@
             return { project_id: pid, project_name: pr ? pr.name : 'Onbekend', hours };
           })
           .sort((a, b) => b.hours - a.hours),
-        otherDist: Array.from(wd.other.entries())
-          .map(([name, hours]) => ({ project_name: name, hours }))
-          .sort((a, b) => b.hours - a.hours),
-        otherTotal: wd.otherTotal,
-        total: Array.from(wd.perTracked.values()).reduce((a, h) => a + h, 0) + wd.otherTotal,
+        total: Array.from(wd.perTracked.values()).reduce((a, h) => a + h, 0),
       };
     });
-  }
-
-  function moneybirdSummaryForEmployee(empId) {
-    const cutoff = fourWeeksAgoIso();
-    const map = new Map();
-    for (const e of allMoneybirdEntries) {
-      if (e.user_moneybird_id !== empId || !e.started_at) continue;
-      if (String(e.started_at).slice(0, 10) < cutoff) continue;
-      const pid = e.moneybird_project_id ? String(e.moneybird_project_id) : 'no-project';
-      const name = e.moneybird_project_name || '(geen project)';
-      const tracked = pid !== 'no-project' && trackedMoneybirdIds.has(pid);
-      if (!map.has(pid)) map.set(pid, { id: pid, name, hours: 0, tracked });
-      map.get(pid).hours += Number(e.hours) || 0;
-    }
-    return Array.from(map.values()).sort((a, b) => b.hours - a.hours);
   }
 
   function render() {
@@ -291,55 +228,21 @@
             </span>`).join('');
 
       const weeks = buildWeeklyForEmployee(e.id);
-      const weeklyRows = weeks.map((w, wIdx) => {
+      const weeklyRows = weeks.map((w) => {
         const dist = w.perProject.length === 0
           ? '<span class="subtle">geen uren</span>'
           : w.perProject.map((pp) => `<span class="badge badge-gray" style="margin-right:.25rem; display:inline-block; margin-bottom:.2rem">${escapeHtml(pp.project_name)}: ${pp.hours.toFixed(1)}u</span>`).join('');
-        const overigBadge = w.otherTotal > 0
-          ? `<a href="#" class="badge" style="background:rgba(139,92,246,.12);color:#6d28d9;text-decoration:none;cursor:pointer" data-toggle-overig="${e.id}|${wIdx}">Overig: ${w.otherTotal.toFixed(1)}u ▾</a>`
-          : '';
-        const overigPanel = w.otherTotal > 0
-          ? `<tr class="hidden" data-overig-panel="${e.id}|${wIdx}">
-              <td colspan="4" style="background:var(--bg-soft); padding:.75rem 1rem">
-                <strong>Overig — uren in Moneybird die niet op een toegewezen project zijn geschreven:</strong>
-                <ul style="margin:.4rem 0 0; padding-left:1.2rem">
-                  ${w.otherDist.map((od) => `<li>${escapeHtml(od.project_name)}: <strong>${od.hours.toFixed(1)}u</strong></li>`).join('')}
-                </ul>
-              </td>
-            </tr>`
-          : '';
         const capCmp = cap > 0
           ? `<span class="badge ${w.total >= cap ? 'badge-green' : w.total >= cap * 0.6 ? 'badge-orange' : 'badge-red'}">${w.total.toFixed(1)} / ${cap}u</span>`
           : '<span class="subtle">—</span>';
         return `
           <tr>
             <td>${fmtDateShort(w.weekStart)}</td>
-            <td>${dist}${overigBadge ? ' ' + overigBadge : ''}</td>
+            <td>${dist}</td>
             <td><strong>${w.total.toFixed(1)}u</strong></td>
             <td>${capCmp}</td>
-          </tr>
-          ${overigPanel}`;
+          </tr>`;
       }).join('');
-
-      const mbSummary = moneybirdSummaryForEmployee(e.id);
-      const mbSummaryTotal = mbSummary.reduce((a, x) => a + x.hours, 0);
-      const mbSummaryHtml = mbSummary.length === 0
-        ? '<p class="subtle">Geen uren geschreven in Moneybird in de laatste 4 weken.</p>'
-        : `<table class="table" style="margin:0">
-            <thead><tr><th>Moneybird-project</th><th>Status</th><th>Uren laatste 4 weken</th></tr></thead>
-            <tbody>
-              ${mbSummary.map((r) => `
-                <tr>
-                  <td><strong>${escapeHtml(r.name)}</strong></td>
-                  <td>${r.tracked ? '<span class="badge badge-green">gekoppeld in app</span>' : '<span class="badge badge-gray">niet gekoppeld</span>'}</td>
-                  <td>${r.hours.toFixed(1)} u</td>
-                </tr>`).join('')}
-              <tr style="background:var(--bg-soft)">
-                <td colspan="2"><strong>Totaal</strong></td>
-                <td><strong>${mbSummaryTotal.toFixed(1)} u</strong></td>
-              </tr>
-            </tbody>
-          </table>`;
 
       return `
         <div class="card-static" style="margin-bottom:1.25rem" data-emp-id="${e.id}">
@@ -394,22 +297,11 @@
             <thead><tr><th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th></tr></thead>
             <tbody>${weeklyRows}</tbody>
           </table>
-
-          <h4 style="margin-top:1rem">Alle Moneybird-projecten (laatste ${WEEKS_BACK} weken)</h4>
-          <p class="subtle" style="margin-top:-.4rem; font-size:.85rem">Toont alle projecten waar deze persoon uren op heeft geschreven in Moneybird, ook als ze niet in deze app gekoppeld zijn.</p>
-          ${mbSummaryHtml}
         </div>`;
     }).join('');
 
     for (const tr of c.querySelectorAll('tr.clickable')) {
       tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
-    }
-    for (const link of c.querySelectorAll('a[data-toggle-overig]')) {
-      link.onclick = (ev) => {
-        ev.preventDefault();
-        const panel = c.querySelector(`tr[data-overig-panel="${link.dataset.toggleOverig}"]`);
-        if (panel) panel.classList.toggle('hidden');
-      };
     }
     for (const btn of c.querySelectorAll('button[data-add-vac]')) {
       btn.onclick = async () => {
@@ -489,27 +381,11 @@
       const weeks = buildWeeklyForEmployee(e.id);
       for (const w of weeks) {
         for (const pp of w.perProject) {
-          weeklyRows.push({ 'Medewerker': e.name, 'Week (ma)': w.weekStart, 'Project': pp.project_name, 'Bron': 'toegewezen', 'Uren': Math.round(pp.hours * 10) / 10 });
-        }
-        for (const od of w.otherDist) {
-          weeklyRows.push({ 'Medewerker': e.name, 'Week (ma)': w.weekStart, 'Project': od.project_name, 'Bron': 'overig (Moneybird)', 'Uren': Math.round(od.hours * 10) / 10 });
+          weeklyRows.push({ 'Medewerker': e.name, 'Week (ma)': w.weekStart, 'Project': pp.project_name, 'Uren': Math.round(pp.hours * 10) / 10 });
         }
       }
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly');
-
-    const mbRows = [];
-    for (const e of employees) {
-      const summary = moneybirdSummaryForEmployee(e.id);
-      for (const r of summary) {
-        mbRows.push({
-          'Medewerker': e.name, 'Moneybird-project': r.name,
-          'Status': r.tracked ? 'gekoppeld in app' : 'niet gekoppeld',
-          'Uren (4 weken)': Math.round(r.hours * 10) / 10,
-        });
-      }
-    }
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(mbRows), 'Moneybird 4w');
 
     XLSX.writeFile(wb, `planning-${new Date().toISOString().slice(0,10)}.xlsx`);
     toast('Excel gedownload', 'success');

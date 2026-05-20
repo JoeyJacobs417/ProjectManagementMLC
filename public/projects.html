@@ -123,9 +123,16 @@
     return `<span class="badge badge-blue" title="${list}">PowerSuite</span>`;
   }
 
+  function initialsOf(name) {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
   function teamCell(team) {
     if (!team || team.length === 0) return '<span class="subtle">—</span>';
-    return team.map((t) => `<span class="badge badge-gray" style="margin-right:.2rem">${escapeHtml(t.name)}</span>`).join('');
+    return team.map((t) => `<span class="badge badge-gray" style="margin-right:.2rem" title="${escapeHtml(t.name)}">${escapeHtml(initialsOf(t.name))}</span>`).join('');
   }
 
   function render() {
