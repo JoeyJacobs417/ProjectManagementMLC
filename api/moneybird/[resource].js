@@ -15,6 +15,8 @@ import {
   setCachedMoneybirdTimeEntries,
   getCachedMoneybirdUsers,
   setCachedMoneybirdUsers,
+  getRecentMoneybirdEntries,
+  setRecentMoneybirdEntries,
 } from '../../lib/db.js';
 
 function firstNameOf(name) {
@@ -34,6 +36,15 @@ async function getMbUsersCached() {
   }
   await setCachedMoneybirdUsers(plain);
   return plain;
+}
+
+function filterEntries(entries, sinceIso, userId) {
+  return entries.filter((e) => {
+    if (!e.started_at) return false;
+    if (String(e.started_at).slice(0, 10) < sinceIso) return false;
+    if (userId && String(e.user_moneybird_id || '') !== String(userId)) return false;
+    return true;
+  });
 }
 
 export default async function handler(req, res) {
@@ -98,9 +109,20 @@ export default async function handler(req, res) {
       const noCache = req.query.nocache === '1';
 
       if (!noCache) {
+        // 1) Pre-warmed bulk (gevuld door cron) — dekt alle since-waarden die ≥ recent.since zijn.
+        const recent = await getRecentMoneybirdEntries();
+        if (recent && Array.isArray(recent.time_entries) && recent.since && recent.since <= since) {
+          const time_entries = filterEntries(recent.time_entries, since, userId);
+          res.setHeader('X-Cache', 'HIT');
+          res.setHeader('X-Source', 'redis-recent');
+          res.status(200).json({ time_entries, since, cached_at: recent.cached_at });
+          return;
+        }
+        // 2) Per-since cache (10 min TTL).
         const cached = await getCachedMoneybirdTimeEntries(since, userId);
         if (cached) {
           res.setHeader('X-Cache', 'HIT');
+          res.setHeader('X-Source', 'redis-per-since');
           res.status(200).json(cached);
           return;
         }
@@ -112,7 +134,13 @@ export default async function handler(req, res) {
       const time_entries = raw.map(normalizeTimeEntry);
       const payload = { time_entries, since, cached_at: new Date().toISOString() };
       await setCachedMoneybirdTimeEntries(since, userId, payload);
+      // Bij een refresh zonder user-filter: ook de pre-warm bulk vernieuwen, zodat
+      // volgende paginabezoeken direct uit Redis komen.
+      if (noCache && !userId) {
+        try { await setRecentMoneybirdEntries(payload); } catch {}
+      }
       res.setHeader('X-Cache', 'MISS');
+      res.setHeader('X-Source', 'moneybird-live');
       res.status(200).json(payload);
     } catch (err) {
       res.status(500).json({ error: err.message });
