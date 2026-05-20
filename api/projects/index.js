@@ -1,7 +1,10 @@
-// GET /api/projects                  -> lijst projecten
-// GET /api/projects?planning_view=1  -> getrimde response voor planning (kleinere payload)
-// GET /api/projects?format=xlsx      -> Excel-export
-// POST /api/projects                 -> nieuw project (≥1 module verplicht)
+// GET /api/projects                                    -> lijst projecten
+// GET /api/projects?planning_view=1                    -> getrimde response voor planning
+// GET /api/projects?with_time_entries=1                -> incl. alle time entries
+// GET /api/projects?with_time_entries=1&time_entries_in_month=YYYY-MM
+//                                                      -> alleen time entries van die maand
+// GET /api/projects?format=xlsx                        -> Excel-export
+// POST /api/projects                                   -> nieuw project (≥1 module verplicht)
 import { Redis } from '@upstash/redis';
 import * as XLSX from 'xlsx';
 import { requireUser } from '../../lib/auth.js';
@@ -21,6 +24,7 @@ const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
 function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
+function isIsoMonth(s) { return /^\d{4}-\d{2}$/.test(String(s || '')); }
 
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
@@ -149,29 +153,20 @@ function buildExcel(enrichedProjects, clientsById) {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
-// Voor planning_view: trim heavy velden + filter time_entries op recente periode (≈5w)
 function trimForPlanning(p, cutoffIso) {
   const trimmedEntries = (p.time_entries || []).filter((e) => {
     if (!e.started_at) return false;
     return String(e.started_at).slice(0, 10) >= cutoffIso;
   });
   return {
-    id: p.id,
-    name: p.name,
-    status: p.status,
-    modules: p.modules,
-    is_poc: p.is_poc,
-    deadline: p.deadline,
-    manager_id: p.manager_id,
-    manager_name: p.manager_name,
+    id: p.id, name: p.name, status: p.status, modules: p.modules,
+    is_poc: p.is_poc, deadline: p.deadline,
+    manager_id: p.manager_id, manager_name: p.manager_name,
     moneybird_project_id: p.moneybird_project_id,
-    available_hours: p.available_hours,
-    hourly_rate: p.hourly_rate,
-    hours_used: p.hours_used,
-    percentage_used: p.percentage_used,
+    available_hours: p.available_hours, hourly_rate: p.hourly_rate,
+    hours_used: p.hours_used, percentage_used: p.percentage_used,
     within_budget: p.within_budget,
-    team: p.team,
-    team_stats: p.team_stats,
+    team: p.team, team_stats: p.team_stats,
     last_synced_at: p.last_synced_at,
     time_entries: trimmedEntries,
   };
@@ -188,15 +183,27 @@ export default async function handler(req, res) {
       projects = projects.filter((p) => p.manager_id === user.id);
     }
     const entriesByProject = await listTimeEntriesBatch(projects.map((p) => p.id));
-    const wantsTimeEntries = req.query.with_time_entries === '1' || req.query.planning_view === '1';
+
     const isPlanningView = req.query.planning_view === '1';
+    const wantsTimeEntries = req.query.with_time_entries === '1' || isPlanningView;
+    const monthFilter = isIsoMonth(req.query.time_entries_in_month) ? String(req.query.time_entries_in_month) : null;
+
     const enriched = projects
       .map((p) => {
-        const entries = entriesByProject.get(p.id) || [];
+        let entries = entriesByProject.get(p.id) || [];
+        // Stats worden altijd berekend uit alle entries (totaal-verbruik blijft accuraat)
         const stats = enrichWithStats(p, entries);
         const mgr = users.find((u) => u.id === p.manager_id);
         const result = { ...stats, manager_name: mgr?.name || null };
-        if (!wantsTimeEntries) delete result.time_entries;
+        if (!wantsTimeEntries) {
+          delete result.time_entries;
+        } else if (monthFilter) {
+          // Filter time_entries op opgegeven maand voor de dashboard-forecast
+          result.time_entries = (result.time_entries || []).filter((e) => {
+            if (!e.started_at) return false;
+            return String(e.started_at).slice(0, 7) === monthFilter;
+          });
+        }
         return result;
       })
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -212,7 +219,6 @@ export default async function handler(req, res) {
     }
 
     if (isPlanningView) {
-      // Trim payload: alleen de laatste ~5 weken time entries + alleen velden die planning gebruikt
       const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 35);
       const cutoffIso = cutoff.toISOString().slice(0, 10);
       const trimmed = enriched.map((p) => trimForPlanning(p, cutoffIso));
@@ -226,19 +232,12 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     const b = req.body || {};
-    if (!b.name) {
-      res.status(400).json({ error: 'Projectnaam is verplicht' });
-      return;
-    }
+    if (!b.name) { res.status(400).json({ error: 'Projectnaam is verplicht' }); return; }
     if (!b.moneybird_project_id || !String(b.moneybird_project_id).trim()) {
-      res.status(400).json({ error: 'Moneybird project is verplicht' });
-      return;
+      res.status(400).json({ error: 'Moneybird project is verplicht' }); return;
     }
     const modules = normalizeModules(b.modules !== undefined ? b.modules : b.module);
-    if (modules.length === 0) {
-      res.status(400).json({ error: 'Selecteer minstens 1 module' });
-      return;
-    }
+    if (modules.length === 0) { res.status(400).json({ error: 'Selecteer minstens 1 module' }); return; }
     const projectId = newId('p_');
     let pdfStored = false;
     let pdfFilename = b.source_pdf_filename || null;
