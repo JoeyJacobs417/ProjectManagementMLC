@@ -91,6 +91,31 @@ function normalizeHiddenEmployees(input) {
   return out;
 }
 
+function normalizeMonthlyRevenueTargets(input) {
+  if (!input || typeof input !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(input)) {
+    if (!/^\d{4}-\d{2}$/.test(String(k))) continue;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    out[k] = Math.round(n);
+  }
+  return out;
+}
+
+function normalizeDashboardPlanningEmployees(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const id of input) {
+    const v = String(id || '').trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const user = await requireUser(req, res);
@@ -133,6 +158,8 @@ export default async function handler(req, res) {
     if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);
     if (b.mail_templates !== undefined) patch.mail_templates = normalizeMailTemplates(b.mail_templates);
     if (b.hidden_employees !== undefined) patch.hidden_employees = normalizeHiddenEmployees(b.hidden_employees);
+    if (b.monthly_revenue_targets !== undefined) patch.monthly_revenue_targets = normalizeMonthlyRevenueTargets(b.monthly_revenue_targets);
+    if (b.dashboard_planning_employees !== undefined) patch.dashboard_planning_employees = normalizeDashboardPlanningEmployees(b.dashboard_planning_employees);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;

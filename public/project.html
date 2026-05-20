@@ -16,15 +16,11 @@
   const id = new URLSearchParams(location.search).get('id');
   if (!id) { document.getElementById('content').innerHTML = '<p>Geen project-ID.</p>'; throw new Error('no id'); }
 
-  let project, managers = [], clients = [], chartsRendered = false;
+  let project, managers = [], chartsRendered = false;
 
   async function load() {
-    const [r, s] = await Promise.all([
-      apiGet(`/api/projects/${encodeURIComponent(id)}`),
-      apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
-    ]);
+    const r = await apiGet(`/api/projects/${encodeURIComponent(id)}`);
     project = r.project;
-    clients = s.settings.clients || [];
     if (me.role === 'admin' && managers.length === 0) {
       const u = await apiGet('/api/admin/users').catch(() => ({ users: [] }));
       managers = (u.users || []).filter((x) => x.active);
@@ -52,8 +48,6 @@
       `<option value="${o.value}" ${o.value === project.status ? 'selected' : ''}>${o.label}</option>`).join('');
     const managerOptions = `<option value="">— Geen —</option>` + managers.map((m) =>
       `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`).join('');
-    const clientOptions = `<option value="">— Geen —</option>` + clients.map((c) =>
-      `<option value="${c.id}" ${c.id === project.client_id ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
     const canEditManager = me.role === 'admin';
     const canDelete = me.role === 'admin';
     const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '', receives_threshold_mails: false }]).map((c) => `
@@ -64,7 +58,6 @@
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
       </tr>`).join('');
 
-    const clientName = (clients.find((c) => c.id === project.client_id) || {}).name;
     const projectModules = project.modules || [];
 
     const notesHtml = (project.notes && project.notes.length > 0)
@@ -90,7 +83,7 @@
             ${project.deadline ? deadlineBadge(project.deadline) : ''}
           </div>
           <p class="subtle">
-            PM: ${escapeHtml(project.manager_name || '—')}${clientName ? ` · Klant: ${escapeHtml(clientName)}` : ''}
+            PM: ${escapeHtml(project.manager_name || '—')}
             ${project.start_date ? ` · Start: ${fmtDate(project.start_date)}` : ''}
             ${project.last_synced_at ? ` · Laatst gesynced: ${fmtDateTime(project.last_synced_at)}` : ''}
           </p>
@@ -101,7 +94,6 @@
         </div>
       </div>
 
-      <!-- NIEUWE LAYOUT: Notities + Uren&Planning bovenaan -->
       <div class="grid grid-2">
         <div class="card-static">
           <h3 style="margin-top:0">Notities</h3>
@@ -127,7 +119,6 @@
         </div>
       </div>
 
-      <!-- Beschrijving + Uitzonderingen + Contacten ONDER het bovenste blok -->
       <div class="card-static" style="margin-top:1rem">
         <h3>Beschrijving</h3>
         <p>${escapeHtml(project.description || '—')}</p>
@@ -177,10 +168,10 @@
           </div>
 
           <div class="form-row">
-            <label><span class="lbl">Klant</span><select name="client_id">${clientOptions}</select></label>
             <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
               <input type="checkbox" name="is_poc" style="width:auto" ${project.is_poc ? 'checked' : ''}> Dit is een POC
             </label>
+            <label></label>
             <label></label>
           </div>
 
@@ -238,8 +229,6 @@
 
       <h2>Uren in de tijd</h2>
       <div class="card-static"><canvas id="hoursOverTime" height="120"></canvas></div>
-      <h2>Uren per medewerker</h2>
-      <div class="card-static"><canvas id="hoursPerUser" height="120"></canvas></div>
 
       <h2>Activiteit</h2>
       <div class="card-static">
@@ -383,7 +372,6 @@
         feature_requests: f.get('feature_requests'),
         status: f.get('status'),
         modules,
-        client_id: f.get('client_id') || '',
         deadline: f.get('deadline') || '',
         start_date: f.get('start_date') || '',
         is_poc: f.get('is_poc') === 'on',
@@ -420,10 +408,6 @@
         ];
         if (d.available > 0) datasets.push({ label: 'Beschikbaar (max)', data: d.labels.map(() => d.available), borderColor: '#ef4444', borderDash: [6, 6], pointRadius: 0, type: 'line', fill: false });
         new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets }, options: { responsive: true, interaction: { mode: 'index' } } });
-      });
-      apiGet(`/api/projects/${encodeURIComponent(id)}/hours?type=per-user`).then((d) => {
-        const ctx = document.getElementById('hoursPerUser'); if (!ctx) return;
-        new Chart(ctx, { type: 'bar', data: { labels: d.labels, datasets: [{ label: 'Uren', data: d.hours, backgroundColor: '#6366f1' }] }, options: { indexAxis: 'y', responsive: true } });
       });
     }
   }

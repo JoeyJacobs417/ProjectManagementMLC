@@ -20,7 +20,7 @@
     <div style="display:flex; flex-wrap:wrap; align-items:center; gap:.75rem">
       <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500; flex:1; min-width:240px">
         🔍
-        <input type="search" id="searchInput" placeholder="Zoek op project, klant, contact, manager, module, team…" style="flex:1">
+        <input type="search" id="searchInput" placeholder="Zoek op project, contact, manager, module, team…" style="flex:1">
       </label>
       <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
         Status:
@@ -43,9 +43,7 @@
   await renderTopbar('/projects.html');
 
   let projects = [];
-  let clientsById = {};
 
-  // Volgende automatische sync: cron draait dagelijks om 07:00 UTC (zie vercel.json)
   function nextScheduledSync() {
     const now = new Date();
     const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 0, 0));
@@ -56,12 +54,8 @@
   }
 
   async function loadAll() {
-    const [pResp, sResp] = await Promise.all([
-      apiGet('/api/projects'),
-      apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [] } })),
-    ]);
+    const pResp = await apiGet('/api/projects');
     projects = pResp.projects;
-    clientsById = Object.fromEntries((sResp.settings.clients || []).map((c) => [c.id, c]));
     updateSyncInfo();
     render();
   }
@@ -106,7 +100,6 @@
       p.name, p.description,
       ...(p.modules || []),
       p.manager_name,
-      clientsById[p.client_id]?.name,
       (p.team || []).map((t) => t.name).join(' '),
       (p.contacts || []).map((c) => `${c.name} ${c.email}`).join(' '),
     ].filter(Boolean).join(' ').toLowerCase();
@@ -118,7 +111,6 @@
     if (modules.length === 1) {
       return `<span class="badge badge-blue">${escapeHtml(modules[0])}</span>`;
     }
-    // Meerdere modules → toon "PowerSuite" badge met hover-tooltip
     const list = modules.map(escapeHtml).join(', ');
     return `<span class="badge badge-blue" title="${list}">PowerSuite</span>`;
   }
@@ -158,20 +150,18 @@
     content.innerHTML = `
       <table class="table">
         <thead><tr>
-          <th>Project</th><th>Klant</th><th>Status</th><th>Modules</th>
+          <th>Project</th><th>Status</th><th>Modules</th>
           <th>PM</th><th>Team</th><th>Uren</th><th>%</th><th>PDF</th>
         </tr></thead>
         <tbody>
           ${filtered.map((p) => {
             const s = p.status || 'in_progress';
-            const clientName = clientsById[p.client_id]?.name || '—';
             const pdfCell = p.has_pdf
               ? `<a href="/api/projects/${encodeURIComponent(p.id)}?action=download_pdf" download title="${escapeHtml(p.source_pdf_filename || 'offerte.pdf')}" data-stop>⬇</a>`
               : '<span class="subtle">—</span>';
             return `
               <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
                 <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-                <td>${escapeHtml(clientName)}</td>
                 <td><span class="badge status-${s}">${statusLabel(s)}</span></td>
                 <td>${modulesCell(p.modules)}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>

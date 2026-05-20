@@ -30,6 +30,10 @@
         Maand:
         <input type="month" id="forecastMonth" style="width:auto">
       </label>
+      <label id="targetWrap" style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
+        Target (€):
+        <input type="number" id="forecastTarget" min="0" step="100" style="width:140px" placeholder="bv. 75000">
+      </label>
       <span class="subtle" id="forecastTotal" style="margin-left:auto"></span>
     </div>
   </div>
@@ -39,15 +43,17 @@
   <div id="deadlines"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml, statusLabel, deadlineBadge, daysFromNow, fmtEuro, isDutchHoliday } from '/app.js';
-  await renderTopbar('/dashboard.html');
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel, deadlineBadge, daysFromNow, fmtEuro, isDutchHoliday } from '/app.js';
+  const me = await renderTopbar('/dashboard.html');
+  const isAdmin = me?.role === 'admin';
 
   // Settings
-  const settingsResp = await apiGet('/api/admin/settings').catch(() => ({ settings: { clients: [], employee_capacities: {}, employee_vacations: {} } }));
+  const settingsResp = await apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, monthly_revenue_targets: {}, dashboard_planning_employees: [] } }));
   const settings = settingsResp.settings;
-  const clientsById = Object.fromEntries((settings.clients || []).map((c) => [c.id, c]));
   const capacities = settings.employee_capacities || {};
   const vacations = settings.employee_vacations || {};
+  let monthlyTargets = settings.monthly_revenue_targets || {};
+  const dashboardEmps = new Set(settings.dashboard_planning_employees || []);
 
   function isoOf(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -97,11 +103,11 @@
     const todayIso = isoOf(today);
     const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 7);
 
-    // Aggregeer per medewerker: alleen in_progress + future tellen mee.
     const byEmp = new Map();
     for (const p of baseProjects) {
       if (p.status !== 'in_progress' && p.status !== 'future') continue;
       for (const t of (p.team || [])) {
+        if (!dashboardEmps.has(t.moneybird_user_id)) continue;
         const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
         if (!byEmp.has(t.moneybird_user_id)) {
           byEmp.set(t.moneybird_user_id, { id: t.moneybird_user_id, name: t.name, totalRemaining: 0 });
@@ -133,6 +139,10 @@
     alerts.sort((a, b) => a.daysLeft - b.daysLeft);
 
     const el = document.getElementById('planningAlerts');
+    if (dashboardEmps.size === 0) {
+      el.innerHTML = '<p class="subtle">Geen medewerkers ingesteld voor dashboard-alert. Schakel medewerkers in via <a href="/planning.html">Planning</a>.</p>';
+      return;
+    }
     if (alerts.length === 0) {
       el.innerHTML = '<p class="subtle">Geen medewerkers die binnen 7 dagen uit hun werk lopen.</p>';
       return;
@@ -171,6 +181,8 @@
   const periodSel = document.getElementById('forecastPeriod');
   const monthInput = document.getElementById('forecastMonth');
   const monthWrap = document.getElementById('monthPickerWrap');
+  const targetWrap = document.getElementById('targetWrap');
+  const targetInput = document.getElementById('forecastTarget');
   const STORAGE_PERIOD = 'pm_forecast_period';
   const STORAGE_MONTH = 'pm_forecast_month';
   const now = new Date();
@@ -178,7 +190,33 @@
   monthInput.value = sessionStorage.getItem(STORAGE_MONTH) || currentMonthIso;
   periodSel.value = sessionStorage.getItem(STORAGE_PERIOD) || 'month';
 
-  // Voor month-mode laden we time entries van die maand zodat past hours kloppen
+  function syncTargetInputFromMonth() {
+    const monthIso = monthInput.value || currentMonthIso;
+    const cur = monthlyTargets[monthIso];
+    targetInput.value = (cur && Number(cur) > 0) ? cur : '';
+    targetInput.disabled = !isAdmin;
+    if (!isAdmin) targetInput.title = 'Alleen admins kunnen het target wijzigen';
+  }
+  syncTargetInputFromMonth();
+
+  async function saveTarget() {
+    if (!isAdmin) return;
+    const monthIso = monthInput.value || currentMonthIso;
+    const raw = targetInput.value.trim();
+    const n = raw === '' ? 0 : Number(raw);
+    const next = { ...monthlyTargets };
+    if (Number.isFinite(n) && n > 0) next[monthIso] = Math.round(n);
+    else delete next[monthIso];
+    try {
+      const r = await apiSend('/api/admin/settings', 'POST', { monthly_revenue_targets: next });
+      monthlyTargets = r.settings.monthly_revenue_targets || {};
+      toast('Target opgeslagen', 'success');
+      renderForecast();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+  targetInput.addEventListener('change', saveTarget);
+  targetInput.addEventListener('blur', saveTarget);
+
   let projectsWithEntries = null;
   let loadedMonthKey = null;
 
@@ -229,6 +267,8 @@
     sessionStorage.setItem(STORAGE_PERIOD, periodSel.value);
     sessionStorage.setItem(STORAGE_MONTH, monthInput.value || '');
     monthWrap.style.display = periodSel.value === 'month' ? '' : 'none';
+    targetWrap.style.display = periodSel.value === 'month' ? '' : 'none';
+    syncTargetInputFromMonth();
 
     const isMonth = periodSel.value === 'month';
     const monthIso = monthInput.value || currentMonthIso;
@@ -346,8 +386,21 @@
     rows.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
     const periodDesc = isMonth ? `maand ${monthIso}` : `komende ${periodSel.value.split('-')[1]} weken`;
+    const target = isMonth ? Number(monthlyTargets[monthIso] || 0) : 0;
+    let targetHtml = '';
+    if (isMonth && target > 0) {
+      const diff = grandTotal - target;
+      const pct = target > 0 ? Math.round((grandTotal / target) * 100) : 0;
+      const onTarget = grandTotal >= target;
+      const color = onTarget ? '#10b981' : '#ef4444';
+      const icon = onTarget ? '✓' : '⚠';
+      const label = onTarget
+        ? `target ${fmtEuro(target)} gehaald (+${fmtEuro(Math.max(0, diff))})`
+        : `tekort ${fmtEuro(Math.abs(diff))} op target ${fmtEuro(target)}`;
+      targetHtml = ` · <strong style="color:${color}">${icon} ${pct}% — ${label}</strong>`;
+    }
     document.getElementById('forecastTotal').innerHTML =
-      ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong>`;
+      ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong>${targetHtml}`;
 
     const el = document.getElementById('forecast');
     if (rows.length === 0) {
@@ -404,12 +457,11 @@
   } else {
     deadlinesEl.innerHTML = `
       <table class="table" style="margin:0">
-        <thead><tr><th>Project</th><th>Klant</th><th>Deadline</th><th>Status</th><th>Uren</th></tr></thead>
+        <thead><tr><th>Project</th><th>Deadline</th><th>Status</th><th>Uren</th></tr></thead>
         <tbody>
           ${withDeadline.map(({ p }) => `
             <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
               <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-              <td>${escapeHtml(clientsById[p.client_id]?.name || '—')}</td>
               <td>${deadlineBadge(p.deadline)}</td>
               <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
               <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>

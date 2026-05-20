@@ -98,9 +98,6 @@ export function fmtEuro(amount) {
 }
 
 // ── Nederlandse feestdagen ──────────────────────────────────────────
-// Berekent jaarlijks: Nieuwjaarsdag, Tweede Paasdag, Koningsdag,
-// Hemelvaartsdag, Tweede Pinksterdag, Eerste + Tweede Kerstdag.
-// Goede Vrijdag en Bevrijdingsdag (5 mei) zijn niet universeel vrij in NL en worden niet meegerekend.
 function calculateEaster(year) {
   const a = year % 19;
   const b = Math.floor(year / 100);
@@ -125,13 +122,10 @@ const _holidayCache = new Map();
 export function dutchHolidaysForYear(year) {
   if (_holidayCache.has(year)) return _holidayCache.get(year);
   const out = [];
-  // Nieuwjaarsdag
   out.push({ date: `${year}-01-01`, name: 'Nieuwjaarsdag' });
-  // Koningsdag (27 april, 26 als 27 op zondag valt)
   const k = new Date(year, 3, 27);
   if (k.getDay() === 0) k.setDate(26);
   out.push({ date: isoOf(k), name: 'Koningsdag' });
-  // Pasen-gerelateerd
   const easter = calculateEaster(year);
   const ep2 = new Date(easter); ep2.setDate(ep2.getDate() + 1);
   const hem = new Date(easter); hem.setDate(hem.getDate() + 39);
@@ -139,7 +133,6 @@ export function dutchHolidaysForYear(year) {
   out.push({ date: isoOf(ep2), name: 'Tweede Paasdag' });
   out.push({ date: isoOf(hem), name: 'Hemelvaartsdag' });
   out.push({ date: isoOf(pin2), name: 'Tweede Pinksterdag' });
-  // Kerst
   out.push({ date: `${year}-12-25`, name: 'Eerste Kerstdag' });
   out.push({ date: `${year}-12-26`, name: 'Tweede Kerstdag' });
   _holidayCache.set(year, out);
@@ -220,7 +213,6 @@ export async function renderTopbar(activePath) {
     { href: '/dashboard.html', label: 'Dashboard' },
     { href: '/projects.html', label: 'Projecten' },
     { href: '/planning.html', label: 'Planning' },
-    { href: '/clients.html', label: 'Klanten' },
     { href: '/medewerkers.html', label: 'Medewerkers' },
   ];
   if (isAdmin) links.push({ href: '/admin-settings.html', label: 'Instellingen' });

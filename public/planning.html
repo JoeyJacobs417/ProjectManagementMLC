@@ -32,7 +32,6 @@
   const me = await renderTopbar('/planning.html');
 
   const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
-  // Statussen die meetellen voor 'resterend werk' (on_hold telt NIET mee).
   const ACTIVE_STATUSES = new Set(['in_progress', 'future']);
   const WEEKS_BACK = 4;
 
@@ -101,18 +100,20 @@
   }
 
   let projects = [], capacities = {}, vacationsByEmp = {};
+  let dashboardEmps = new Set();
 
   async function loadAllData() {
     document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
 
     const [projResp, settingsResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
-      apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {} } })),
+      apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [] } })),
     ]);
 
     projects = projResp.projects;
     capacities = settingsResp.settings.employee_capacities || {};
     vacationsByEmp = settingsResp.settings.employee_vacations || {};
+    dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
 
     rebuildEmployees();
     render();
@@ -137,7 +138,6 @@
         const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
         rec.rows.push({ project: p, ownHours, remaining });
         rec.totalOwn += ownHours;
-        // On hold-projecten tellen niet mee voor 'resterend werk'.
         if (ACTIVE_STATUSES.has(p.status)) rec.totalRemaining += remaining;
         if (p.status === 'future') rec.newCount += 1;
       }
@@ -187,6 +187,16 @@
     });
   }
 
+  async function toggleDashboardEmp(empId, on) {
+    const next = new Set(dashboardEmps);
+    if (on) next.add(empId); else next.delete(empId);
+    try {
+      const r = await apiSend('/api/admin/settings', 'POST', { dashboard_planning_employees: Array.from(next) });
+      dashboardEmps = new Set(r.settings.dashboard_planning_employees || []);
+      toast(on ? 'Toegevoegd aan dashboard-alert' : 'Verwijderd uit dashboard-alert', 'success');
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
   function render() {
     const empFilter = document.getElementById('empFilter');
     const value = empFilter.value;
@@ -213,6 +223,7 @@
       const cap = Number(capacities[e.id]) || 0;
       const periods = vacationsByEmp[e.id] || [];
       const upcoming = periods.filter((p) => p.end >= today);
+      const onDashboard = dashboardEmps.has(e.id);
 
       let estimateHtml = '<span class="subtle">capaciteit niet ingesteld</span>';
       if (cap > 0 && e.totalRemaining > 0) {
@@ -269,6 +280,14 @@
             </div>
           </div>
 
+          ${isAdmin ? `
+            <div style="margin-bottom:.75rem">
+              <label style="display:inline-flex; align-items:center; gap:.5rem; margin:0; font-weight:500">
+                <input type="checkbox" data-dashboard-toggle="${e.id}" style="width:auto" ${onDashboard ? 'checked' : ''}>
+                Tonen op dashboard als deze medewerker binnen 7 dagen uit werk loopt
+              </label>
+            </div>` : ''}
+
           <div style="margin-bottom:.75rem">
             <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.35rem">Vakantie</div>
             <div>${vacationListHtml}</div>
@@ -314,6 +333,9 @@
 
     for (const tr of c.querySelectorAll('tr.clickable')) {
       tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+    }
+    for (const cb of c.querySelectorAll('input[data-dashboard-toggle]')) {
+      cb.onchange = () => toggleDashboardEmp(cb.dataset.dashboardToggle, cb.checked);
     }
     for (const btn of c.querySelectorAll('button[data-add-vac]')) {
       btn.onclick = async () => {

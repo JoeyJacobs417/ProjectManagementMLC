@@ -57,13 +57,10 @@
       <div class="checkbox-grid" id="modulesGrid"></div>
 
       <div class="form-row">
-        <label>
-          <span class="lbl">Klant</span>
-          <select name="client_id" id="clientField"><option value="">— Geen —</option></select>
-        </label>
         <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
           <input type="checkbox" name="is_poc" style="width:auto"> Dit is een POC
         </label>
+        <label></label>
         <label></label>
       </div>
 
@@ -130,7 +127,7 @@
   </div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS, MODULE_OPTIONS, escapeHtml } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, STATUS_OPTIONS, MODULE_OPTIONS } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   // Status dropdown
@@ -149,32 +146,8 @@
       ${m}
     </label>`).join('');
 
-  let settings = { clients: [], pdf_prompt: '' };
+  let settings = { pdf_prompt: '' };
   try { ({ settings } = await apiGet('/api/admin/settings')); } catch {}
-
-  // Klanten
-  const clientSel = document.getElementById('clientField');
-  (settings.clients || []).forEach((c) => {
-    const o = document.createElement('option');
-    o.value = c.id; o.textContent = c.name;
-    clientSel.appendChild(o);
-  });
-  clientSel.onchange = () => {
-    const client = (settings.clients || []).find((c) => c.id === clientSel.value);
-    if (!client || !Array.isArray(client.contacts) || client.contacts.length === 0) return;
-    if (!confirm(`Contactpersonen van "${client.name}" overnemen?`)) return;
-    const tbody = document.getElementById('contactsBody');
-    tbody.innerHTML = '';
-    for (const c of client.contacts) {
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
-        <td><input type="email" data-contact="email" value="${escapeHtml(c.email || '')}"></td>
-        <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
-      tbody.appendChild(tr);
-      bindContactRow(tr);
-    }
-  };
 
   // PDF prompt
   const DEFAULT_PDF_PROMPT = `Lees de bijgevoegde PDF (een offerte of projectvoorstel) en haal de volgende informatie eruit:
@@ -377,7 +350,6 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       pdf_pending_token: f.get('pdf_pending_token') || null,
       status: f.get('status') || 'in_progress',
       modules,
-      client_id: f.get('client_id') || '',
       deadline: f.get('deadline') || '',
       start_date: f.get('start_date') || '',
       is_poc: f.get('is_poc') === 'on',
