@@ -58,19 +58,40 @@
     weekStarts.push(dateToIso(d));
   }
 
-  const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}&user_id=${encodeURIComponent(empId)}`;
-  const [{ projects: trackedProjects }, mbResp] = await Promise.all([
-    apiGet('/api/projects').catch(() => ({ projects: [] })),
-    apiGet(mbUrl).catch(() => ({ time_entries: [] })),
-  ]);
+  // BELANGRIJK: geen user_id-parameter; filteren doen we client-side.
+  // De server-side user_id-filter raakt de pre-warm bulk niet (die wordt
+  // alleen zonder user_id gevuld) en de live-fetch met user_id:<id> is
+  // niet altijd betrouwbaar. We hergebruiken hier dezelfde aanpak als de
+  // oude planning-pagina deed: 1× alles ophalen, client-side filteren.
+  const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}`;
 
-  // Map moneybird_project_id → tracked project (voor link en badge)
+  let trackedProjects = [];
+  let mbResp = null;
+  let mbError = null;
+  try {
+    const [pRes, mRes] = await Promise.all([
+      apiGet('/api/projects').catch(() => ({ projects: [] })),
+      apiGet(mbUrl),
+    ]);
+    trackedProjects = pRes.projects || [];
+    mbResp = mRes;
+  } catch (err) {
+    mbError = err.message || String(err);
+  }
+
+  if (mbError) {
+    document.getElementById('content').innerHTML =
+      `<p class="subtle">Fout bij ophalen Moneybird-uren: ${escapeHtml(mbError)}</p>`;
+    throw new Error(mbError);
+  }
+
   const trackedByMbId = new Map();
   for (const p of trackedProjects) {
     if (p.moneybird_project_id) trackedByMbId.set(String(p.moneybird_project_id), p);
   }
 
-  const entries = (mbResp.time_entries || []).filter((e) => String(e.user_moneybird_id || '') === String(empId));
+  const allEntries = mbResp.time_entries || [];
+  const entries = allEntries.filter((e) => String(e.user_moneybird_id || '') === String(empId));
 
   // Naam fallback: uit URL → uit eerste entry → 'Onbekend'
   let empName = empNameFromUrl || '';
@@ -94,7 +115,6 @@
     const hours = Number(e.hours) || 0;
     rec.total += hours;
     rec.entries.push(e);
-    // Vind de juiste week-monday
     const entryDate = new Date(day);
     const wMonday = dateToIso(mondayOf(entryDate));
     if (rec.perWeek.has(wMonday)) rec.perWeek.set(wMonday, rec.perWeek.get(wMonday) + hours);
@@ -103,12 +123,16 @@
   const grouped = Array.from(byProject.values()).sort((a, b) => b.total - a.total);
   const grandTotal = grouped.reduce((a, g) => a + g.total, 0);
 
+  const debugInfo = `${allEntries.length} entries opgehaald, ${entries.length} voor deze medewerker`;
   document.getElementById('empMeta').textContent =
-    `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))}`;
+    `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))} · ${debugInfo}`;
 
   const c = document.getElementById('content');
   if (grouped.length === 0) {
-    c.innerHTML = '<p class="subtle">Geen uren geschreven in deze periode.</p>';
+    const hint = allEntries.length === 0
+      ? 'Moneybird gaf 0 entries terug voor deze periode. Mogelijk is de pre-warm cache nog leeg (cron heeft nog niet gedraaid).'
+      : `Wel ${allEntries.length} entries opgehaald, maar geen daarvan heeft user_moneybird_id "${escapeHtml(empId)}". Controleer of de ID klopt.`;
+    c.innerHTML = `<p class="subtle">Geen uren gevonden in deze periode.<br><span style="font-size:.85rem">${hint}</span></p>`;
   } else {
     c.innerHTML = `
       <table class="table">
