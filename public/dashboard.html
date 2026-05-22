@@ -7,12 +7,9 @@
 <header class="topbar" id="topbar"></header>
 <main class="container">
   <h1>Dashboard</h1>
-  <p class="subtle">Planning, omzetvoorspelling en komende deadlines. Voor meer rapportages: <a href="/reports.html">Rapportages</a>. Medewerker-overzicht: <a href="/medewerkers.html">Medewerkers</a>.</p>
+  <p class="subtle">Omzetvoorspelling en komende deadlines. Voor meer rapportages: <a href="/reports.html">Rapportages</a>. Medewerker-overzicht: <a href="/medewerkers.html">Medewerkers</a>.</p>
 
-  <h2>Planning</h2>
-  <div id="planningAlerts"><p class="subtle">Laden…</p></div>
-
-  <h2 style="margin-top:2rem">Voorspelling omzet</h2>
+  <h2>Voorspelling omzet</h2>
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <div style="display:flex; flex-wrap:wrap; gap:.75rem; align-items:center">
       <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
@@ -53,7 +50,6 @@
   const capacities = settings.employee_capacities || {};
   const vacations = settings.employee_vacations || {};
   let monthlyTargets = settings.monthly_revenue_targets || {};
-  const dashboardEmps = new Set(settings.dashboard_planning_employees || []);
 
   function isoOf(d) {
     return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -76,116 +72,10 @@
     }
     return workdays;
   }
-  function estimateCompletionDate(remainingHours, capacityPerWeek, periods) {
-    if (!capacityPerWeek || capacityPerWeek <= 0) return null;
-    const dailyHours = capacityPerWeek / 5;
-    const workDaysNeeded = Math.ceil(remainingHours / dailyHours);
-    if (workDaysNeeded === 0) return new Date();
-    let d = new Date(); d.setHours(0, 0, 0, 0);
-    let worked = 0; let safety = 365 * 5;
-    while (worked < workDaysNeeded && safety-- > 0) {
-      if (!isUnavailable(d, periods)) {
-        worked++;
-        if (worked >= workDaysNeeded) return new Date(d);
-      }
-      d.setDate(d.getDate() + 1);
-    }
-    return null;
-  }
   function fmtDate(iso) { if (!iso) return ''; const [y,m,d]=iso.split('-'); return `${d}-${m}-${y}`; }
 
-  // ── Planning: medewerkers die binnen 7 dagen uit werk lopen ─────
   const basicResp = await apiGet('/api/projects');
   const baseProjects = basicResp.projects;
-
-  function renderPlanningAlerts() {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const todayIso = isoOf(today);
-    const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 7);
-
-    // Medewerkers op actieve uurtje-factuurtje-projecten lopen per definitie niet uit hun werk.
-    const hourlyMembers = new Set();
-    for (const p of baseProjects) {
-      if (p.status !== 'in_progress' && p.status !== 'future' && p.status !== 'recurring') continue;
-      if (!p.is_hourly_billing) continue;
-      for (const t of (p.team || [])) hourlyMembers.add(t.moneybird_user_id);
-    }
-
-    const byEmp = new Map();
-    for (const p of baseProjects) {
-      if (p.status !== 'in_progress' && p.status !== 'future' && p.status !== 'recurring') continue;
-      if (p.is_hourly_billing) continue;
-      for (const t of (p.team || [])) {
-        if (!dashboardEmps.has(t.moneybird_user_id)) continue;
-        const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
-        if (!byEmp.has(t.moneybird_user_id)) {
-          byEmp.set(t.moneybird_user_id, { id: t.moneybird_user_id, name: t.name, totalRemaining: 0 });
-        }
-        byEmp.get(t.moneybird_user_id).totalRemaining += remaining;
-      }
-    }
-
-    const alerts = [];
-    for (const rec of byEmp.values()) {
-      if (hourlyMembers.has(rec.id)) continue;
-      const cap = Number(capacities[rec.id]) || 0;
-      const empVacations = (vacations[rec.id] || []).filter((p) => p.end >= todayIso);
-      if (rec.totalRemaining <= 0) {
-        alerts.push({ name: rec.name, daysLeft: 0, completionIso: null, totalRemaining: 0, cap, kind: 'no_work' });
-        continue;
-      }
-      if (cap <= 0) continue;
-      const completion = estimateCompletionDate(rec.totalRemaining, cap, empVacations);
-      if (!completion) continue;
-      if (completion <= cutoff) {
-        const daysLeft = Math.max(0, Math.round((completion - today) / 86400000));
-        alerts.push({
-          name: rec.name, daysLeft,
-          completionIso: isoOf(completion),
-          totalRemaining: rec.totalRemaining, cap, kind: 'running_out',
-        });
-      }
-    }
-    alerts.sort((a, b) => a.daysLeft - b.daysLeft);
-
-    const el = document.getElementById('planningAlerts');
-    if (dashboardEmps.size === 0) {
-      el.innerHTML = '<p class="subtle">Geen medewerkers ingesteld voor dashboard-alert. Schakel medewerkers in via <a href="/planning.html">Planning</a>.</p>';
-      return;
-    }
-    if (alerts.length === 0) {
-      el.innerHTML = '<p class="subtle">Geen medewerkers die binnen 7 dagen uit hun werk lopen.</p>';
-      return;
-    }
-
-    el.innerHTML = `
-      <div class="card-static" style="border-left:4px solid #ef4444; padding:1rem">
-        <div style="font-weight:600; margin-bottom:.5rem">
-          ⚠ ${alerts.length} ${alerts.length === 1 ? 'medewerker loopt' : 'medewerkers lopen'} binnen 7 dagen uit ${alerts.length === 1 ? 'het' : 'hun'} werk
-        </div>
-        <table class="table" style="margin:0">
-          <thead><tr><th>Medewerker</th><th>Status</th><th>Resterend</th><th>Capaciteit</th><th>Klaar op</th></tr></thead>
-          <tbody>
-            ${alerts.map((a) => `
-              <tr>
-                <td><strong>${escapeHtml(a.name)}</strong></td>
-                <td>${a.kind === 'no_work'
-                  ? '<span class="badge badge-red">geen werk</span>'
-                  : (a.daysLeft === 0
-                      ? '<span class="badge badge-red">vandaag klaar</span>'
-                      : `<span class="badge badge-orange">${a.daysLeft} ${a.daysLeft === 1 ? 'dag' : 'dagen'}</span>`)}</td>
-                <td>${a.totalRemaining.toFixed(1)} u</td>
-                <td>${a.cap > 0 ? a.cap + ' u/wk' : '<span class="subtle">—</span>'}</td>
-                <td>${a.completionIso ? fmtDate(a.completionIso) : '<span class="subtle">—</span>'}</td>
-              </tr>`).join('')}
-          </tbody>
-        </table>
-        <p class="subtle" style="margin:.5rem 0 0; font-size:.85rem">
-          Op basis van toegewezen In progress / Future projecten en ingestelde capaciteit. On hold-projecten tellen niet mee. Ken nieuwe projecten toe via <a href="/planning.html">Planning</a>.
-        </p>
-      </div>`;
-  }
-  renderPlanningAlerts();
 
   // ── Forecast setup ─────────────────────────────────────────────
   const periodSel = document.getElementById('forecastPeriod');

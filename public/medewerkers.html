@@ -249,9 +249,13 @@
 
   function renderCapacityCard() {
     if (!isAdmin) return;
+    const card = document.getElementById('capacityCard');
     const visible = allEmployees.filter((e) => !hiddenIds.has(e.id));
-    if (visible.length === 0) return;
-    document.getElementById('capacityCard').classList.remove('hidden');
+    if (visible.length === 0) {
+      card.classList.add('hidden');
+      return;
+    }
+    card.classList.remove('hidden');
     document.getElementById('capGrid').innerHTML = `
       <table class="table" style="margin:0">
         <thead><tr><th>Medewerker</th><th style="width:160px">Uur per week</th></tr></thead>
@@ -268,11 +272,16 @@
   if (isAdmin) {
     document.getElementById('capForm').addEventListener('submit', async (e) => {
       e.preventDefault();
+      // Start vanuit bestaande capaciteiten zodat verborgen medewerkers hun cap behouden
+      // (die staan niet in het formulier en zouden anders gewist worden).
       const newCaps = {};
+      for (const id of Object.keys(capacities)) {
+        if (hiddenIds.has(id)) newCaps[id] = capacities[id];
+      }
       for (const input of document.querySelectorAll('input[data-cap-id]')) {
         const id = input.dataset.capId;
         const val = input.value.trim();
-        if (val === '') continue;
+        if (val === '') { delete newCaps[id]; continue; }
         const num = Number(val);
         if (Number.isFinite(num) && num >= 0) newCaps[id] = num;
       }

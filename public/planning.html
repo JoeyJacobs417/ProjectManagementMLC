@@ -313,64 +313,107 @@
               </div>` : ''}
           </div>
 
-          <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold / Recurring)</h4>
-          <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vier rechterkolommen tonen de uren-toewijzing per week (komende 4 weken vanaf maandag). Klik in een veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en kan niet worden bewerkt.</p>
-          <table class="table" style="margin:0">
-            <thead><tr>
-              <th>Project</th>
-              <th>Uren door ${escapeHtml(e.name)}</th><th>Resterend</th><th>Totaal</th>
-              ${futureWeeks.map((w) => `<th title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
-            </tr></thead>
-            <tbody>
-              ${rows.map((row) => {
-                const p = row.project;
-                const rowStyle = row.remaining === 0 ? ' style="background:rgba(239,68,68,.10)"' : '';
-                const allocByWeek = new Map(
-                  (p.weekly_allocations || [])
-                    .filter((a) => a.moneybird_user_id === e.id)
-                    .map((a) => [a.week_start, Number(a.hours) || 0])
-                );
-                const allocCells = futureWeeks.map((w) => {
-                  const h = allocByWeek.get(w) || 0;
-                  return `<td><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
-                }).join('');
-                return `
-                  <tr${rowStyle}>
-                    <td><a href="/project.html?id=${encodeURIComponent(p.id)}"><strong>${escapeHtml(p.name)}</strong></a>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}${p.is_hourly_billing ? ' <span class="badge" style="background:rgba(16,185,129,.15);color:#047857">U/F</span>' : ''}</td>
-                    <td>${row.ownHours.toFixed(1)} u</td>
-                    <td>${p.is_hourly_billing ? '<span class="subtle">∞</span>' : row.remaining.toFixed(1) + ' u'}</td>
-                    <td>${p.is_hourly_billing ? '<span class="subtle">—</span>' : (Number(p.available_hours) || 0).toFixed(1) + ' u'}</td>
-                    ${allocCells}
-                  </tr>`;
-              }).join('')}
-              ${(() => {
-                const hoursPerDay = cap > 0 ? cap / 5 : 8;
-                const vacCells = futureWeeks.map((w) => {
-                  const [y, m, d] = w.split('-').map(Number);
-                  const wStart = new Date(y, m - 1, d);
-                  const days = [];
-                  for (let i = 0; i < 5; i++) {
-                    const dd = new Date(wStart); dd.setDate(wStart.getDate() + i);
-                    const iso = dateToIso(dd);
-                    if (isDutchHoliday(iso)) continue;
-                    if (periods.some((p) => p.start <= iso && iso <= p.end)) days.push(iso);
-                  }
-                  if (days.length === 0) return '<td><span class="subtle">—</span></td>';
-                  const hrs = days.length * hoursPerDay;
-                  const tip = days.map(fmtDate).join(', ');
-                  return `<td title="${tip}"><span class="badge badge-orange">${hrs.toFixed(1)} u</span></td>`;
-                }).join('');
-                return `
+          ${(() => {
+            // ─ Pre-compute vakantie/feestdag-uren per week + project-allocatie sommen per week
+            const firstName = (e.name || '').trim().split(/\s+/)[0] || e.name;
+            const hoursPerDay = cap > 0 ? cap / 5 : 8;
+            const vacInfoPerWeek = new Map();
+            for (const w of futureWeeks) {
+              const [y, m, d] = w.split('-').map(Number);
+              const wStart = new Date(y, m - 1, d);
+              const items = [];
+              for (let i = 0; i < 5; i++) {
+                const dd = new Date(wStart); dd.setDate(wStart.getDate() + i);
+                const iso = dateToIso(dd);
+                const isHoliday = isDutchHoliday(iso);
+                const isVac = periods.some((p) => p.start <= iso && iso <= p.end);
+                if (isHoliday) items.push({ iso, kind: 'holiday' });
+                else if (isVac) items.push({ iso, kind: 'vacation' });
+              }
+              vacInfoPerWeek.set(w, items);
+            }
+            const projectAllocSum = new Map(futureWeeks.map((w) => [w, 0]));
+            for (const row of rows) {
+              const p = row.project;
+              for (const a of (p.weekly_allocations || [])) {
+                if (a.moneybird_user_id !== e.id) continue;
+                if (projectAllocSum.has(a.week_start)) {
+                  projectAllocSum.set(a.week_start, projectAllocSum.get(a.week_start) + (Number(a.hours) || 0));
+                }
+              }
+            }
+            const totalPerWeek = new Map(futureWeeks.map((w) => {
+              const vacHrs = vacInfoPerWeek.get(w).length * hoursPerDay;
+              return [w, projectAllocSum.get(w) + vacHrs];
+            }));
+            const anyOver = cap > 0 && futureWeeks.some((w) => totalPerWeek.get(w) > cap + 0.01);
+
+            const rowsHtml = rows.map((row) => {
+              const p = row.project;
+              const isOverbudget = row.remaining === 0 && !p.is_hourly_billing;
+              const rowStyle = isOverbudget ? ' style="background:rgba(239,68,68,.10)"' : '';
+              const allocByWeek = new Map(
+                (p.weekly_allocations || [])
+                  .filter((a) => a.moneybird_user_id === e.id)
+                  .map((a) => [a.week_start, Number(a.hours) || 0])
+              );
+              const allocCells = futureWeeks.map((w) => {
+                const h = allocByWeek.get(w) || 0;
+                return `<td><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
+              }).join('');
+              return `
+                <tr${rowStyle}>
+                  <td><a href="/project.html?id=${encodeURIComponent(p.id)}"><strong>${escapeHtml(p.name)}</strong></a>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}${p.is_hourly_billing ? ' <span class="badge" style="background:rgba(16,185,129,.15);color:#047857">U/F</span>' : ''}</td>
+                  <td>${row.ownHours.toFixed(1)} u</td>
+                  <td>${p.is_hourly_billing ? '<span class="subtle">∞</span>' : row.remaining.toFixed(1) + ' u'}</td>
+                  <td>${p.is_hourly_billing ? '<span class="subtle">—</span>' : (Number(p.available_hours) || 0).toFixed(1) + ' u'}</td>
+                  ${allocCells}
+                </tr>`;
+            }).join('');
+
+            const vacCells = futureWeeks.map((w) => {
+              const items = vacInfoPerWeek.get(w);
+              if (items.length === 0) return '<td><span class="subtle">—</span></td>';
+              const hrs = items.length * hoursPerDay;
+              const tip = items.map((it) => `${fmtDate(it.iso)}${it.kind === 'holiday' ? ' (feestdag)' : ''}`).join(', ');
+              return `<td title="${tip}"><span class="badge badge-orange">${hrs.toFixed(1)} u</span></td>`;
+            }).join('');
+
+            const totalCells = futureWeeks.map((w) => {
+              const planned = totalPerWeek.get(w);
+              if (cap <= 0) return `<td><strong>${planned.toFixed(1)} u</strong></td>`;
+              const over = planned > cap + 0.01;
+              const cellStyle = over ? 'color:#b91c1c; background:rgba(239,68,68,.12)' : '';
+              return `<td style="${cellStyle}"><strong>${planned.toFixed(1)} / ${cap} u</strong></td>`;
+            }).join('');
+
+            return `
+              <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold / Recurring)</h4>
+              <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vier rechterkolommen tonen de uren-toewijzing per week (komende 4 weken vanaf maandag). Klik in een veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en NL-feestdagen en kan niet worden bewerkt.</p>
+              <table class="table" style="margin:0">
+                <thead><tr>
+                  <th>Project</th>
+                  <th>Uren door ${escapeHtml(firstName)}</th><th>Resterend</th><th>Totaal</th>
+                  ${futureWeeks.map((w) => `<th title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
+                </tr></thead>
+                <tbody>
+                  ${rowsHtml}
                   <tr style="background:rgba(245,158,11,.06)">
                     <td><strong>Vakantie</strong> <span class="subtle" style="font-size:.8rem">(automatisch)</span></td>
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     ${vacCells}
-                  </tr>`;
-              })()}
-            </tbody>
-          </table>
+                  </tr>
+                  <tr style="background:var(--bg-soft)">
+                    <td><strong>Totaal per week</strong></td>
+                    <td colspan="3"><span class="subtle">—</span></td>
+                    ${totalCells}
+                  </tr>
+                </tbody>
+              </table>
+              ${anyOver ? `<p style="color:#b91c1c; font-weight:600; margin:.5rem 0 0; font-size:.85rem">⚠ In een of meer weken is meer ingepland dan de capaciteit van ${cap} u/wk toelaat. Pas de inplanning aan of verhoog de capaciteit.</p>` : ''}`;
+          })()}
 
           <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
           <table class="table" style="margin:0">
