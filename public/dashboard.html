@@ -238,23 +238,114 @@
     return projectsWithEntries;
   }
 
-  function statsForMonth(projects, monthIso) {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const todayIso = isoOf(today);
-    const map = new Map();
+  // Gemiddeld uurtarief voor de potentiele omzet-kolom.
+  const AVG_HOURLY_RATE = 145;
+
+  // Bereken per medewerker hoeveel uur DECLARABEL in de maand is gewerkt + bijbehorende omzet.
+  // Cap per project: voor niet-uurtje-factuurtje stoppen we bij available_hours;
+  // voor uurtje-factuurtje tellen alle uren.
+  function computeRealizedForMonth(projects, monthIso, todayIso) {
+    const out = new Map();
     for (const p of projects) {
-      for (const e of (p.time_entries || [])) {
-        if (!e.user_moneybird_id || !e.started_at) continue;
+      const rate = Number(p.hourly_rate) || 0;
+      if (rate <= 0) continue;
+      const entries = (p.time_entries || []).filter((e) => {
+        if (!e.started_at) return false;
         const day = String(e.started_at).slice(0, 10);
-        if (!day.startsWith(monthIso)) continue;
-        if (day > todayIso) continue;
-        if (!map.has(e.user_moneybird_id)) map.set(e.user_moneybird_id, { hoursByProject: new Map(), total: 0 });
-        const rec = map.get(e.user_moneybird_id);
-        rec.hoursByProject.set(p.id, (rec.hoursByProject.get(p.id) || 0) + (Number(e.hours) || 0));
-        rec.total += Number(e.hours) || 0;
+        return day.startsWith(monthIso) && day <= todayIso;
+      });
+      if (entries.length === 0) continue;
+      const hoursInMonth = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
+      if (hoursInMonth <= 0) continue;
+      const hoursTotal = Number(p.hours_used) || 0;
+      const hoursBefore = Math.max(0, hoursTotal - hoursInMonth);
+      let declarableInMonth;
+      if (p.is_hourly_billing) {
+        declarableInMonth = hoursInMonth;
+      } else {
+        const cap = Math.max(0, (Number(p.available_hours) || 0) - hoursBefore);
+        declarableInMonth = Math.min(cap, hoursInMonth);
+      }
+      if (declarableInMonth <= 0) continue;
+      const byMember = new Map();
+      for (const e of entries) {
+        if (!e.user_moneybird_id) continue;
+        byMember.set(e.user_moneybird_id, (byMember.get(e.user_moneybird_id) || 0) + (Number(e.hours) || 0));
+      }
+      for (const [memberId, memberHours] of byMember) {
+        const memberDeclarable = (memberHours / hoursInMonth) * declarableInMonth;
+        const cur = out.get(memberId) || { hours: 0, revenue: 0 };
+        cur.hours += memberDeclarable;
+        cur.revenue += memberDeclarable * rate;
+        out.set(memberId, cur);
       }
     }
-    return map;
+    return out;
+  }
+
+  // Bereken per medewerker hoeveel uur is ingepland (in weekly_allocations) voor de gegeven
+  // week-starts. Per project gecapped op remaining (tenzij uurtje-factuurtje).
+  function computePlannedForWeeks(projects, weekStartsInPeriod) {
+    const weekSet = new Set(weekStartsInPeriod);
+    const out = new Map();
+    for (const p of projects) {
+      if (p.status === 'done') continue;
+      const rate = Number(p.hourly_rate) || 0;
+      if (rate <= 0) continue;
+      const allocs = (p.weekly_allocations || []).filter((a) => weekSet.has(a.week_start));
+      if (allocs.length === 0) continue;
+      const byMember = new Map();
+      for (const a of allocs) {
+        const h = Number(a.hours) || 0;
+        if (h <= 0) continue;
+        byMember.set(a.moneybird_user_id, (byMember.get(a.moneybird_user_id) || 0) + h);
+      }
+      const totalAlloc = Array.from(byMember.values()).reduce((a, h) => a + h, 0);
+      if (totalAlloc <= 0) continue;
+      let cappedTotal = totalAlloc;
+      if (!p.is_hourly_billing) {
+        const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
+        cappedTotal = Math.min(totalAlloc, remaining);
+      }
+      if (cappedTotal <= 0) continue;
+      const factor = cappedTotal / totalAlloc;
+      for (const [memberId, memberHours] of byMember) {
+        const capped = memberHours * factor;
+        const cur = out.get(memberId) || { hours: 0, revenue: 0 };
+        cur.hours += capped;
+        cur.revenue += capped * rate;
+        out.set(memberId, cur);
+      }
+    }
+    return out;
+  }
+
+  // De 4 maandagen (huidige + 3 vooruit) die in een gegeven periode vallen.
+  function weekStartsForPeriod(periodValue, monthIso) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const dow = today.getDay();
+    const diff = dow === 0 ? -6 : 1 - dow;
+    const thisMonday = new Date(today); thisMonday.setDate(thisMonday.getDate() + diff);
+    const all = [];
+    for (let i = 0; i < 4; i++) {
+      const d = new Date(thisMonday); d.setDate(d.getDate() + i * 7);
+      all.push(isoOf(d));
+    }
+    if (periodValue === 'month') {
+      const [y, m] = monthIso.split('-').map(Number);
+      const lastDayNum = new Date(y, m, 0).getDate();
+      const firstDay = `${monthIso}-01`;
+      const lastDay = `${monthIso}-${String(lastDayNum).padStart(2, '0')}`;
+      return all.filter((w) => w >= firstDay && w <= lastDay);
+    }
+    if (periodValue.startsWith('weeks-')) {
+      const weeks = Number(periodValue.split('-')[1]);
+      const startIso = isoOf(thisMonday);
+      const end = new Date(today); end.setDate(end.getDate() + weeks * 7 - 1);
+      const endIso = isoOf(end);
+      return all.filter((w) => w >= startIso && w <= endIso);
+    }
+    return [];
   }
 
   function getFutureWorkdaysInMonth(monthIso, empVacations) {
@@ -282,139 +373,79 @@
 
     const isMonth = periodSel.value === 'month';
     const monthIso = monthInput.value || currentMonthIso;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayIsoStr = isoOf(today);
 
     let projects = baseProjects;
-    let pastByEmp = new Map();
     if (isMonth) {
-      try {
-        projects = await ensureProjectsForMonth(monthIso);
-        pastByEmp = statsForMonth(projects, monthIso);
-      } catch (err) {
-        projects = baseProjects;
-        pastByEmp = new Map();
-      }
+      try { projects = await ensureProjectsForMonth(monthIso); }
+      catch (err) { projects = baseProjects; }
     }
 
-    const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future' || p.status === 'recurring');
-
-    function ensurePerPersonRec(id, name) {
-      if (!perPerson.has(id)) {
-        perPerson.set(id, {
-          id, name,
-          futureBreakdown: [], futureRawHours: 0,
-          hourlyProjects: [],
-          pastHours: 0, pastRevenue: 0,
+    // Verzamel alle relevante medewerkers (uit team van niet-done projecten + uit time entries in maand).
+    const empMap = new Map();
+    function ensureEmp(id, name) {
+      if (!empMap.has(id)) {
+        empMap.set(id, {
+          id, name: name || 'Onbekend',
+          realizedHours: 0, realizedRevenue: 0,
+          plannedHours: 0, plannedRevenue: 0,
+          potentialRevenue: 0,
         });
       }
-      return perPerson.get(id);
+      return empMap.get(id);
     }
-
-    const perPerson = new Map();
-    for (const p of inProgress) {
-      const rate = Number(p.hourly_rate) || 0;
-      if (rate <= 0 || !p.team || p.team.length === 0) continue;
-      // Uurtje-factuurtje: geen vast budget, vult resterende capaciteit op (pass 3 hieronder).
-      if (p.is_hourly_billing) {
-        for (const member of p.team) {
-          const rec = ensurePerPersonRec(member.moneybird_user_id, member.name);
-          rec.hourlyProjects.push({ project: p, rate });
-        }
-        continue;
-      }
-      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
-      const totalProjectHoursUsed = (p.team_stats || []).reduce((a, s) => a + (Number(s.hours) || 0), 0);
-      for (const member of p.team) {
-        const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === member.moneybird_user_id);
-        const memberHours = stat ? Number(stat.hours) || 0 : 0;
-        const shareRatio = totalProjectHoursUsed > 0
-          ? (memberHours / totalProjectHoursUsed)
-          : (1 / p.team.length);
-        const estRemainingHours = remaining > 0 ? shareRatio * remaining : 0;
-        const rec = ensurePerPersonRec(member.moneybird_user_id, member.name);
-        rec.futureBreakdown.push({ project: p, hours: estRemainingHours, rate });
-        rec.futureRawHours += estRemainingHours;
-      }
+    for (const p of projects) {
+      if (p.status === 'done') continue;
+      for (const t of (p.team || [])) ensureEmp(t.moneybird_user_id, t.name);
     }
-
     if (isMonth) {
-      const projectById = new Map(projects.map((p) => [p.id, p]));
-      for (const [empId, pastRec] of pastByEmp.entries()) {
-        let name = 'Onbekend';
-        if (!perPerson.has(empId)) {
-          for (const p of projects) {
-            const t = (p.team || []).find((x) => x.moneybird_user_id === empId);
-            if (t) { name = t.name; break; }
-          }
+      for (const p of projects) {
+        for (const e of (p.time_entries || [])) {
+          if (e.user_moneybird_id) ensureEmp(e.user_moneybird_id, e.user_name);
         }
-        const rec = ensurePerPersonRec(empId, perPerson.has(empId) ? perPerson.get(empId).name : name);
-        let pastHrs = 0;
-        let pastRev = 0;
-        for (const [pid, hrs] of pastRec.hoursByProject.entries()) {
-          const proj = projectById.get(pid);
-          const rate = proj ? Number(proj.hourly_rate) || 0 : 0;
-          pastHrs += hrs;
-          pastRev += hrs * rate;
-        }
-        rec.pastHours = pastHrs;
-        rec.pastRevenue = pastRev;
       }
     }
 
-    let grandTotal = 0;
-    const rows = [];
-    for (const rec of perPerson.values()) {
+    // Reeds omgezet (alleen in maand-mode; weken-vooruit modes hebben geen verleden in de periode).
+    if (isMonth) {
+      const realized = computeRealizedForMonth(projects, monthIso, todayIsoStr);
+      for (const [empId, r] of realized) {
+        const rec = ensureEmp(empId);
+        rec.realizedHours = r.hours;
+        rec.realizedRevenue = r.revenue;
+      }
+    }
+
+    // Geplande omzet (uit weekly_allocations op de week-starts die in de periode vallen).
+    const weekStarts = weekStartsForPeriod(periodSel.value, monthIso);
+    const planned = computePlannedForWeeks(projects, weekStarts);
+    for (const [empId, pl] of planned) {
+      const rec = ensureEmp(empId);
+      rec.plannedHours = pl.hours;
+      rec.plannedRevenue = pl.revenue;
+    }
+
+    // Potentiele omzet = werkbare uren in de periode × €145 (per medewerker o.b.v. capaciteit).
+    for (const rec of empMap.values()) {
       const cap = Number(capacities[rec.id]) || 0;
+      if (cap <= 0) continue;
       const empVacations = vacations[rec.id] || [];
-
-      let maxFutureHours = Infinity;
-      let periodLabel = '∞';
-      if (isMonth) {
-        const futWd = getFutureWorkdaysInMonth(monthIso, empVacations);
-        periodLabel = cap > 0 ? `${futWd} werkdagen resterend` : `${futWd} werkdagen resterend (geen capaciteit)`;
-        if (cap > 0) maxFutureHours = (cap / 5) * futWd;
-      } else if (periodSel.value.startsWith('weeks-')) {
+      let workdays = 0;
+      if (isMonth) workdays = getFutureWorkdaysInMonth(monthIso, empVacations);
+      else if (periodSel.value.startsWith('weeks-')) {
         const weeks = Number(periodSel.value.split('-')[1]);
-        const futWd = getFutureWorkdaysInWeeks(weeks, empVacations);
-        periodLabel = cap > 0 ? `${weeks}w (${futWd} werkdagen)` : `${weeks}w (${futWd} werkdagen, geen capaciteit)`;
-        if (cap > 0) maxFutureHours = (cap / 5) * futWd;
+        workdays = getFutureWorkdaysInWeeks(weeks, empVacations);
       }
-
-      const factor = rec.futureRawHours > maxFutureHours ? maxFutureHours / rec.futureRawHours : 1;
-      let futureHours = 0;
-      let futureRevenue = 0;
-      for (const b of rec.futureBreakdown) {
-        const h = b.hours * factor;
-        futureHours += h;
-        futureRevenue += h * b.rate;
-      }
-
-      // Uurtje-factuurtje: vul de resterende capaciteit op met deze projecten (gelijk verdeeld).
-      // Zonder ingestelde capaciteit kunnen we geen toekomstige uren schatten — past hours tellen al wel mee.
-      const hourlyProjects = rec.hourlyProjects || [];
-      if (hourlyProjects.length > 0 && Number.isFinite(maxFutureHours)) {
-        const leftover = Math.max(0, maxFutureHours - futureHours);
-        const perHourly = leftover / hourlyProjects.length;
-        for (const hp of hourlyProjects) {
-          futureHours += perHourly;
-          futureRevenue += perHourly * hp.rate;
-        }
-      }
-
-      const pastHours = isMonth ? rec.pastHours : 0;
-      const pastRevenue = isMonth ? rec.pastRevenue : 0;
-      const totalHours = pastHours + futureHours;
-      const totalRevenue = pastRevenue + futureRevenue;
-      if (totalRevenue === 0 && totalHours === 0) continue;
-      grandTotal += totalRevenue;
-      rows.push({
-        name: rec.name, cap: cap > 0 ? cap : null,
-        pastHours, futureHours, totalHours,
-        pastRevenue, futureRevenue, totalRevenue,
-        capped: factor < 1, periodLabel,
-      });
+      rec.potentialRevenue = (cap / 5) * workdays * AVG_HOURLY_RATE;
     }
-    rows.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
+    const rows = Array.from(empMap.values())
+      .map((r) => ({ ...r, forecastRevenue: r.realizedRevenue + r.plannedRevenue }))
+      .filter((r) => r.realizedRevenue > 0 || r.plannedRevenue > 0 || r.potentialRevenue > 0)
+      .sort((a, b) => b.forecastRevenue - a.forecastRevenue);
+
+    const grandTotal = rows.reduce((a, r) => a + r.forecastRevenue, 0);
     const periodDesc = isMonth ? `maand ${monthIso}` : `komende ${periodSel.value.split('-')[1]} weken`;
     const target = isMonth ? Number(monthlyTargets[monthIso] || 0) : 0;
     let targetHtml = '';
@@ -430,7 +461,7 @@
       targetHtml = `<span style="color:${color}; font-weight:600">${icon} ${pct}% — ${label}</span>`;
     }
     document.getElementById('forecastTotal').innerHTML =
-      `<span>Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong></span>${targetHtml}`;
+      `<span>Totaal voorspelde omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong></span>${targetHtml}`;
 
     const el = document.getElementById('forecast');
     if (rows.length === 0) {
@@ -441,32 +472,33 @@
       <table class="table" style="margin:0">
         <thead><tr>
           <th>Medewerker</th>
-          <th>Capaciteit</th>
-          ${isMonth ? '<th>Reeds gewerkt</th>' : ''}
-          <th>Werkbare uren ${isMonth ? '(rest van maand)' : 'in periode'}</th>
-          <th>${isMonth ? 'Totaal uren' : 'Geschatte uren'}</th>
-          <th>Verwachte omzet</th>
+          <th title="Declarabele uren in deze periode × uurtarief. Voor projecten zonder uurtje-factuurtje tellen alleen uren tot 100% verbruikt.">Reeds omgezet</th>
+          <th title="Werkbare uren in de periode × € ${AVG_HOURLY_RATE} (gemiddeld uurtarief).">Potentiele omzet</th>
+          <th title="Ingeplande uren op de pagina Planning × uurtarief. Per project gecapped op resterend budget (tenzij uurtje-factuurtje).">Geplande omzet</th>
+          <th title="Reeds omgezet + Geplande omzet.">Voorspelde omzet</th>
         </tr></thead>
         <tbody>
           ${rows.map((r) => `
             <tr>
               <td><strong>${escapeHtml(r.name)}</strong></td>
-              <td>${r.cap !== null ? r.cap + ' u/wk' : '<span class="subtle">niet ingesteld</span>'}</td>
-              ${isMonth ? `<td>${r.pastHours.toFixed(1)} u <span class="subtle">(${fmtEuro(r.pastRevenue)})</span></td>` : ''}
-              <td><span class="subtle">${escapeHtml(r.periodLabel)}</span></td>
-              <td>
-                ${isMonth
-                  ? `${r.totalHours.toFixed(1)} u <span class="subtle">(waarvan ${r.futureHours.toFixed(1)} u nog te doen${r.capped ? ', capped' : ''})</span>`
-                  : `${r.futureHours.toFixed(1)} u${r.capped ? ' <span class="subtle">(capped)</span>' : ''}`}
-              </td>
-              <td><strong>${fmtEuro(r.totalRevenue)}</strong></td>
+              <td>${r.realizedRevenue > 0
+                ? `<strong>${fmtEuro(r.realizedRevenue)}</strong> <span class="subtle">(${r.realizedHours.toFixed(1)} u)</span>`
+                : '<span class="subtle">—</span>'}</td>
+              <td>${r.potentialRevenue > 0
+                ? fmtEuro(r.potentialRevenue)
+                : '<span class="subtle">geen capaciteit</span>'}</td>
+              <td>${r.plannedRevenue > 0
+                ? `<strong>${fmtEuro(r.plannedRevenue)}</strong> <span class="subtle">(${r.plannedHours.toFixed(1)} u)</span>`
+                : '<span class="subtle">—</span>'}</td>
+              <td><strong>${fmtEuro(r.forecastRevenue)}</strong></td>
             </tr>`).join('')}
         </tbody>
       </table>
-      <p class="subtle" style="margin-top:.5rem">
-        ${isMonth
-          ? `<strong>Maand-modus:</strong> reeds gewerkte uren in ${monthIso} (uit Moneybird) + geschatte resterende uren (op basis van capaciteit × resterende werkdagen, exclusief weekenden/vakantie/feestdagen, pro-rata verdeeld over teamleden).`
-          : 'Werkbare uren = (capaciteit ÷ 5) × werkdagen in de periode, exclusief weekenden, vakantiedagen en Nederlandse feestdagen.'}
+      <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
+        <strong>Reeds omgezet</strong> = uren in deze periode × uurtarief (per project gecapped op 100% verbruikt, tenzij uurtje-factuurtje).
+        <strong>Potentiele omzet</strong> = werkbare uren in de periode (capaciteit ÷ 5 × werkdagen, excl. weekend/vakantie/feestdagen) × € ${AVG_HOURLY_RATE}.
+        <strong>Geplande omzet</strong> = ingeplande uren (Planning-pagina) × uurtarief, per project gecapped op resterend budget tenzij uurtje-factuurtje.
+        <strong>Voorspelde omzet</strong> = Reeds + Geplande.
       </p>
     `;
   }

@@ -42,6 +42,26 @@ function normalizeTeam(input) {
   return out;
 }
 
+function normalizeWeeklyAllocations(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const a of input) {
+    if (!a) continue;
+    const userId = String(a.moneybird_user_id || '').trim();
+    const week = String(a.week_start || '').trim();
+    const hours = Number(a.hours);
+    if (!userId) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) continue;
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    const key = `${userId}|${week}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ moneybird_user_id: userId, week_start: week, hours: Math.round(hours * 100) / 100 });
+  }
+  return out;
+}
+
 function normalizeTeamAllocations(input) {
   if (!Array.isArray(input)) return [];
   const out = [];
@@ -120,6 +140,7 @@ async function buildDetail(project) {
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     team_allocations: Array.isArray(project.team_allocations) ? project.team_allocations : [],
+    weekly_allocations: Array.isArray(project.weekly_allocations) ? project.weekly_allocations : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
     activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
     last_synced_at: project.last_synced_at || null,
@@ -245,6 +266,7 @@ export default async function handler(req, res) {
     if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
     if (b.team_allocations !== undefined) project.team_allocations = normalizeTeamAllocations(b.team_allocations);
+    if (b.weekly_allocations !== undefined) project.weekly_allocations = normalizeWeeklyAllocations(b.weekly_allocations);
     if (typeof project.available_hours === 'string') project.available_hours = Number(project.available_hours) || 0;
     if (typeof project.hourly_rate === 'string') project.hourly_rate = Number(project.hourly_rate) || 0;
 

@@ -55,6 +55,26 @@ function normalizeContacts(input) {
   return out;
 }
 
+function normalizeWeeklyAllocations(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const a of input) {
+    if (!a) continue;
+    const userId = String(a.moneybird_user_id || '').trim();
+    const week = String(a.week_start || '').trim();
+    const hours = Number(a.hours);
+    if (!userId) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) continue;
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    const key = `${userId}|${week}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ moneybird_user_id: userId, week_start: week, hours: Math.round(hours * 100) / 100 });
+  }
+  return out;
+}
+
 function normalizeStatus(s) { return VALID_STATUSES.includes(String(s || '').toLowerCase()) ? String(s).toLowerCase() : 'in_progress'; }
 
 function normalizeModules(input) {
@@ -104,6 +124,7 @@ function enrichWithStats(project, entries) {
     feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
+    weekly_allocations: Array.isArray(project.weekly_allocations) ? project.weekly_allocations : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
     activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
     last_synced_at: project.last_synced_at || null,
@@ -162,7 +183,7 @@ function trimForPlanning(p, cutoffIso) {
   });
   return {
     id: p.id, name: p.name, status: p.status, modules: p.modules,
-    is_poc: p.is_poc, deadline: p.deadline,
+    is_poc: p.is_poc, is_hourly_billing: !!p.is_hourly_billing, deadline: p.deadline,
     manager_id: p.manager_id, manager_name: p.manager_name,
     moneybird_project_id: p.moneybird_project_id,
     available_hours: p.available_hours, hourly_rate: p.hourly_rate,
@@ -170,6 +191,7 @@ function trimForPlanning(p, cutoffIso) {
     within_budget: p.within_budget,
     team: p.team, team_stats: p.team_stats,
     last_synced_at: p.last_synced_at,
+    weekly_allocations: Array.isArray(p.weekly_allocations) ? p.weekly_allocations : [],
     time_entries: trimmedEntries,
   };
 }
@@ -273,6 +295,7 @@ export default async function handler(req, res) {
       start_date: normalizeDate(b.start_date),
       is_poc: !!b.is_poc,
       is_hourly_billing: !!b.is_hourly_billing,
+      weekly_allocations: normalizeWeeklyAllocations(b.weekly_allocations),
       feature_requests: String(b.feature_requests || ''),
       notes: [],
       activity_log: [],
