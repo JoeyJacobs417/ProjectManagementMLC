@@ -71,10 +71,25 @@ export default async function handler(req, res) {
   }
 
   if (resource === 'employees') {
-    // Combineer Moneybird users (incl. email) + iedereen die in onze projecten uren heeft geschreven
+    // Combineer Moneybird users (incl. email) + iedereen die in onze projecten uren heeft geschreven.
+    // Met ?nocache=1 wordt de Moneybird users-cache eerst geforceerd ververst.
+    const noCache = req.query.nocache === '1';
     const map = new Map();
     try {
-      const mbUsers = await getMbUsersCached();
+      let mbUsers;
+      if (noCache) {
+        const users = await fetchUsers();
+        const plain = {};
+        if (Array.isArray(users)) {
+          for (const u of users) {
+            plain[String(u.id)] = { name: u.name || '', email: u.email || '' };
+          }
+        }
+        await setCachedMoneybirdUsers(plain);
+        mbUsers = plain;
+      } else {
+        mbUsers = await getMbUsersCached();
+      }
       for (const [id, info] of Object.entries(mbUsers)) {
         map.set(id, { id, name: info.name || 'Onbekend', email: info.email || '', first_name: firstNameOf(info.name) });
       }

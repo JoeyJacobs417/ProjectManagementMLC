@@ -3,6 +3,12 @@
 <meta charset="utf-8"><title>Projecten — Projectmanager</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<style>
+  th[data-sort] { cursor: pointer; user-select: none; }
+  th[data-sort]:hover { background: var(--bg-soft); }
+  th .sort-arrow { display: inline-block; margin-left: .25rem; opacity: .5; font-size: .75em; }
+  th[data-sort].active .sort-arrow { opacity: 1; }
+</style>
 </head><body>
 <header class="topbar" id="topbar"></header>
 <main class="container">
@@ -89,10 +95,13 @@
 
   const STORAGE_STATUS = 'pm_projects_status_filter';
   const STORAGE_QUERY = 'pm_projects_query';
+  const STORAGE_SORT_DIR = 'pm_projects_pct_sort_dir';
   const status = document.getElementById('statusFilter');
   const search = document.getElementById('searchInput');
   status.value = sessionStorage.getItem(STORAGE_STATUS) || 'all';
   search.value = sessionStorage.getItem(STORAGE_QUERY) || '';
+  // 0 = niet sorteren, 1 = oplopend, -1 = aflopend
+  let pctSortDir = Number(sessionStorage.getItem(STORAGE_SORT_DIR)) || 0;
 
   function matchSearch(p, q) {
     if (!q) return true;
@@ -139,6 +148,10 @@
       return true;
     });
 
+    if (pctSortDir !== 0) {
+      filtered.sort((a, b) => pctSortDir * ((Number(a.percentage_used) || 0) - (Number(b.percentage_used) || 0)));
+    }
+
     document.getElementById('filterCount').textContent =
       `${filtered.length} van ${projects.length} ${projects.length === 1 ? 'project' : 'projecten'}`;
 
@@ -147,11 +160,14 @@
       content.innerHTML = '<p class="subtle">Geen projecten gevonden.</p>';
       return;
     }
+    const pctArrow = pctSortDir === 0 ? '↕' : (pctSortDir === -1 ? '▼' : '▲');
     content.innerHTML = `
       <table class="table">
         <thead><tr>
           <th>Project</th><th>Status</th><th>Modules</th>
-          <th>PM</th><th>Team</th><th>Uren</th><th>%</th><th>PDF</th>
+          <th>PM</th><th>Team</th><th>Uren</th>
+          <th data-sort="pct" class="${pctSortDir !== 0 ? 'active' : ''}">% <span class="sort-arrow">${pctArrow}</span></th>
+          <th>PDF</th>
         </tr></thead>
         <tbody>
           ${filtered.map((p) => {
@@ -179,6 +195,15 @@
         location.href = `/project.html?id=${tr.dataset.id}`;
       };
     });
+    const pctTh = content.querySelector('th[data-sort="pct"]');
+    if (pctTh) {
+      pctTh.onclick = () => {
+        // 0 → -1 (aflopend, hoogste %% eerst) → 1 (oplopend) → 0 (geen sortering)
+        pctSortDir = pctSortDir === 0 ? -1 : pctSortDir === -1 ? 1 : 0;
+        sessionStorage.setItem(STORAGE_SORT_DIR, String(pctSortDir));
+        render();
+      };
+    }
   }
 
   status.addEventListener('change', render);

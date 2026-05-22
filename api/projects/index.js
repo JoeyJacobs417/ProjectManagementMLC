@@ -49,7 +49,8 @@ function normalizeContacts(input) {
     const name = String(c.name || '').trim();
     const email = String(c.email || '').trim();
     if (!name && !email) continue;
-    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails });
+    const lang = String(c.language || 'nl').toLowerCase() === 'en' ? 'en' : 'nl';
+    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails, language: lang });
   }
   return out;
 }
@@ -99,6 +100,7 @@ function enrichWithStats(project, entries) {
     deadline: project.deadline || '',
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
+    is_hourly_billing: !!project.is_hourly_billing,
     feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
@@ -270,6 +272,7 @@ export default async function handler(req, res) {
       deadline: normalizeDate(b.deadline),
       start_date: normalizeDate(b.start_date),
       is_poc: !!b.is_poc,
+      is_hourly_billing: !!b.is_hourly_billing,
       feature_requests: String(b.feature_requests || ''),
       notes: [],
       activity_log: [],

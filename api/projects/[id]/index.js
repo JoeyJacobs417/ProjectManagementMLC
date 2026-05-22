@@ -66,7 +66,8 @@ function normalizeContacts(input) {
     const name = String(c.name || '').trim();
     const email = String(c.email || '').trim();
     if (!name && !email) continue;
-    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails });
+    const lang = String(c.language || 'nl').toLowerCase() === 'en' ? 'en' : 'nl';
+    out.push({ name, email, receives_threshold_mails: !!c.receives_threshold_mails, language: lang });
   }
   return out;
 }
@@ -114,6 +115,7 @@ async function buildDetail(project) {
     deadline: project.deadline || '',
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
+    is_hourly_billing: !!project.is_hourly_billing,
     feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
@@ -239,6 +241,7 @@ export default async function handler(req, res) {
     if (b.deadline !== undefined) project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
     if (b.start_date !== undefined) project.start_date = isIsoDate(b.start_date) ? String(b.start_date) : '';
     if (b.is_poc !== undefined) project.is_poc = !!b.is_poc;
+    if (b.is_hourly_billing !== undefined) project.is_hourly_billing = !!b.is_hourly_billing;
     if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
     if (b.team_allocations !== undefined) project.team_allocations = normalizeTeamAllocations(b.team_allocations);

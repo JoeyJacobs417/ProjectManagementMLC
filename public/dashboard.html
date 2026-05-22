@@ -103,9 +103,18 @@
     const todayIso = isoOf(today);
     const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 7);
 
+    // Medewerkers op actieve uurtje-factuurtje-projecten lopen per definitie niet uit hun werk.
+    const hourlyMembers = new Set();
+    for (const p of baseProjects) {
+      if (p.status !== 'in_progress' && p.status !== 'future') continue;
+      if (!p.is_hourly_billing) continue;
+      for (const t of (p.team || [])) hourlyMembers.add(t.moneybird_user_id);
+    }
+
     const byEmp = new Map();
     for (const p of baseProjects) {
       if (p.status !== 'in_progress' && p.status !== 'future') continue;
+      if (p.is_hourly_billing) continue;
       for (const t of (p.team || [])) {
         if (!dashboardEmps.has(t.moneybird_user_id)) continue;
         const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
@@ -118,6 +127,7 @@
 
     const alerts = [];
     for (const rec of byEmp.values()) {
+      if (hourlyMembers.has(rec.id)) continue;
       const cap = Number(capacities[rec.id]) || 0;
       const empVacations = (vacations[rec.id] || []).filter((p) => p.end >= todayIso);
       if (rec.totalRemaining <= 0) {
@@ -287,11 +297,31 @@
 
     const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future');
 
+    function ensurePerPersonRec(id, name) {
+      if (!perPerson.has(id)) {
+        perPerson.set(id, {
+          id, name,
+          futureBreakdown: [], futureRawHours: 0,
+          hourlyProjects: [],
+          pastHours: 0, pastRevenue: 0,
+        });
+      }
+      return perPerson.get(id);
+    }
+
     const perPerson = new Map();
     for (const p of inProgress) {
-      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
       const rate = Number(p.hourly_rate) || 0;
       if (rate <= 0 || !p.team || p.team.length === 0) continue;
+      // Uurtje-factuurtje: geen vast budget, vult resterende capaciteit op (pass 3 hieronder).
+      if (p.is_hourly_billing) {
+        for (const member of p.team) {
+          const rec = ensurePerPersonRec(member.moneybird_user_id, member.name);
+          rec.hourlyProjects.push({ project: p, rate });
+        }
+        continue;
+      }
+      const remaining = Math.max(0, (Number(p.available_hours) || 0) - (Number(p.hours_used) || 0));
       const totalProjectHoursUsed = (p.team_stats || []).reduce((a, s) => a + (Number(s.hours) || 0), 0);
       for (const member of p.team) {
         const stat = (p.team_stats || []).find((s) => s.moneybird_user_id === member.moneybird_user_id);
@@ -300,14 +330,7 @@
           ? (memberHours / totalProjectHoursUsed)
           : (1 / p.team.length);
         const estRemainingHours = remaining > 0 ? shareRatio * remaining : 0;
-        if (!perPerson.has(member.moneybird_user_id)) {
-          perPerson.set(member.moneybird_user_id, {
-            id: member.moneybird_user_id, name: member.name,
-            futureBreakdown: [], futureRawHours: 0,
-            pastHours: 0, pastRevenue: 0,
-          });
-        }
-        const rec = perPerson.get(member.moneybird_user_id);
+        const rec = ensurePerPersonRec(member.moneybird_user_id, member.name);
         rec.futureBreakdown.push({ project: p, hours: estRemainingHours, rate });
         rec.futureRawHours += estRemainingHours;
       }
@@ -316,19 +339,14 @@
     if (isMonth) {
       const projectById = new Map(projects.map((p) => [p.id, p]));
       for (const [empId, pastRec] of pastByEmp.entries()) {
+        let name = 'Onbekend';
         if (!perPerson.has(empId)) {
-          let name = 'Onbekend';
           for (const p of projects) {
             const t = (p.team || []).find((x) => x.moneybird_user_id === empId);
             if (t) { name = t.name; break; }
           }
-          perPerson.set(empId, {
-            id: empId, name,
-            futureBreakdown: [], futureRawHours: 0,
-            pastHours: 0, pastRevenue: 0,
-          });
         }
-        const rec = perPerson.get(empId);
+        const rec = ensurePerPersonRec(empId, perPerson.has(empId) ? perPerson.get(empId).name : name);
         let pastHrs = 0;
         let pastRev = 0;
         for (const [pid, hrs] of pastRec.hoursByProject.entries()) {
@@ -368,6 +386,18 @@
         const h = b.hours * factor;
         futureHours += h;
         futureRevenue += h * b.rate;
+      }
+
+      // Uurtje-factuurtje: vul de resterende capaciteit op met deze projecten (gelijk verdeeld).
+      // Zonder ingestelde capaciteit kunnen we geen toekomstige uren schatten — past hours tellen al wel mee.
+      const hourlyProjects = rec.hourlyProjects || [];
+      if (hourlyProjects.length > 0 && Number.isFinite(maxFutureHours)) {
+        const leftover = Math.max(0, maxFutureHours - futureHours);
+        const perHourly = leftover / hourlyProjects.length;
+        for (const hp of hourlyProjects) {
+          futureHours += perHourly;
+          futureRevenue += perHourly * hp.rate;
+        }
       }
 
       const pastHours = isMonth ? rec.pastHours : 0;

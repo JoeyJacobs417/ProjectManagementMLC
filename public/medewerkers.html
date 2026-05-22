@@ -14,7 +14,10 @@
 <main class="container">
   <div class="page-header">
     <h1>Medewerkers</h1>
-    <span class="subtle" id="countLabel"></span>
+    <div style="display:flex; gap:.5rem; align-items:center">
+      <button class="btn btn-ghost" id="refreshEmpsBtn" title="Haal nieuwe medewerkers op uit Moneybird. Verborgen medewerkers blijven verborgen.">↻ Ververs medewerkers</button>
+      <span class="subtle" id="countLabel"></span>
+    </div>
   </div>
   <p class="subtle">Capaciteit, prestaties en declarabiliteit per medewerker. Klik op een rij voor de uren-detailpagina (laatste 4 weken). Klik op een kolomkop om te sorteren. Admins kunnen capaciteiten aanpassen en medewerkers verbergen die niet relevant zijn (bv. marketing).</p>
 
@@ -39,15 +42,20 @@
   const me = await renderTopbar('/medewerkers.html');
   const isAdmin = me?.role === 'admin';
 
+  async function fetchEmployees(forceRefresh = false) {
+    const url = forceRefresh ? '/api/moneybird/employees?nocache=1' : '/api/moneybird/employees';
+    return apiGet(url).catch(() => ({ employees: [] }));
+  }
+
   const [{ projects }, settingsResp, mbEmpResp] = await Promise.all([
     apiGet('/api/projects'),
     apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, hidden_employees: [] } })),
-    apiGet('/api/moneybird/employees').catch(() => ({ employees: [] })),
+    fetchEmployees(false),
   ]);
   const settings = settingsResp.settings;
   let capacities = settings.employee_capacities || {};
   let hiddenIds = new Set(settings.hidden_employees || []);
-  const mbEmployees = mbEmpResp.employees || [];
+  let mbEmployees = mbEmpResp.employees || [];
 
   const empMap = new Map();
   for (const e of mbEmployees) {
@@ -283,5 +291,26 @@
   } else {
     renderTable();
   }
+
+  document.getElementById('refreshEmpsBtn').onclick = async () => {
+    const btn = document.getElementById('refreshEmpsBtn');
+    btn.disabled = true; btn.textContent = '⏳ Ophalen…';
+    try {
+      const before = new Set(allEmployees.map((e) => e.id));
+      const { employees: fresh } = await fetchEmployees(true);
+      const added = (fresh || []).filter((e) => !before.has(e.id));
+      if (added.length === 0) {
+        toast('Geen nieuwe medewerkers gevonden.', 'info');
+      } else {
+        toast(`${added.length} nieuwe ${added.length === 1 ? 'medewerker' : 'medewerkers'} toegevoegd. Pagina wordt herladen…`, 'success');
+        setTimeout(() => location.reload(), 800);
+        return;
+      }
+    } catch (err) {
+      toast(`Ophalen mislukt: ${err.message}`, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = '↻ Ververs medewerkers';
+    }
+  };
 </script>
 </body></html>

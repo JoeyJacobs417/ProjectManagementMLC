@@ -50,10 +50,16 @@
       `<option value="${m.id}" ${m.id === project.manager_id ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.email)})</option>`).join('');
     const canEditManager = me.role === 'admin';
     const canDelete = me.role === 'admin';
-    const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '', receives_threshold_mails: false }]).map((c) => `
+    const contactRows = (project.contacts && project.contacts.length ? project.contacts : [{ name: '', email: '', receives_threshold_mails: false, language: 'nl' }]).map((c) => `
       <tr>
         <td><input type="text" data-contact="name" value="${escapeHtml(c.name || '')}"></td>
         <td><input type="email" data-contact="email" value="${escapeHtml(c.email || '')}"></td>
+        <td>
+          <select data-contact="language" style="width:auto">
+            <option value="nl" ${(c.language || 'nl') === 'nl' ? 'selected' : ''}>Nederlands</option>
+            <option value="en" ${c.language === 'en' ? 'selected' : ''}>Engels</option>
+          </select>
+        </td>
         <td style="text-align:center"><input type="checkbox" data-contact="receives_threshold_mails" ${c.receives_threshold_mails ? 'checked' : ''} style="width:auto"></td>
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
       </tr>`).join('');
@@ -80,6 +86,7 @@
             <span class="badge status-${project.status}">${statusLabel(project.status)}</span>
             ${projectModules.map((m) => `<span class="badge badge-blue">${escapeHtml(m)}</span>`).join('')}
             ${project.is_poc ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>` : ''}
+            ${project.is_hourly_billing ? `<span class="badge" style="background:rgba(16,185,129,.15);color:#047857" title="Uurtje-factuurtje: geen urenlimiet">Uurtje-factuurtje</span>` : ''}
             ${project.deadline ? deadlineBadge(project.deadline) : ''}
           </div>
           <p class="subtle">
@@ -143,7 +150,9 @@
             <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
               <input type="checkbox" name="is_poc" style="width:auto" ${project.is_poc ? 'checked' : ''}> Dit is een POC
             </label>
-            <label></label>
+            <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500" title="Geen urenlimiet; uren zijn altijd declarabel en tellen altijd mee in de omzetvoorspelling.">
+              <input type="checkbox" name="is_hourly_billing" style="width:auto" ${project.is_hourly_billing ? 'checked' : ''}> Uurtje-factuurtje
+            </label>
             <label></label>
           </div>
 
@@ -164,7 +173,7 @@
           <h4>Contactpersonen bij de klant</h4>
           <table class="table">
             <thead><tr>
-              <th>Naam</th><th>E-mailadres</th>
+              <th>Naam</th><th>E-mailadres</th><th>Taal</th>
               <th style="text-align:center">Ontvangt urenverbruik-mails</th><th></th>
             </tr></thead>
             <tbody id="contactsBody">${contactRows}</tbody>
@@ -213,7 +222,7 @@
           <h3>Contactpersonen</h3>
           <ul style="margin:.25rem 0 0; padding-left:1.2rem">
             ${project.contacts.map((c) => `
-              <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
+              <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''} <span class="badge badge-gray" style="font-size:.75rem" title="Taal van mailcommunicatie">${(c.language || 'nl') === 'en' ? 'EN' : 'NL'}</span>${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
           </ul>` : ''}
       </div>
 
@@ -349,6 +358,12 @@
       tr.innerHTML = `
         <td><input type="text" data-contact="name"></td>
         <td><input type="email" data-contact="email"></td>
+        <td>
+          <select data-contact="language" style="width:auto">
+            <option value="nl" selected>Nederlands</option>
+            <option value="en">Engels</option>
+          </select>
+        </td>
         <td style="text-align:center"><input type="checkbox" data-contact="receives_threshold_mails" style="width:auto"></td>
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
       tbody.appendChild(tr);
@@ -372,8 +387,9 @@
         const name = tr.querySelector('[data-contact=name]').value.trim();
         const email = tr.querySelector('[data-contact=email]').value.trim();
         const receives = tr.querySelector('[data-contact=receives_threshold_mails]').checked;
+        const language = tr.querySelector('[data-contact=language]').value === 'en' ? 'en' : 'nl';
         if (!name && !email) continue;
-        contacts.push({ name, email, receives_threshold_mails: receives });
+        contacts.push({ name, email, receives_threshold_mails: receives, language });
       }
       const modules = Array.from(document.querySelectorAll('#modulesGrid input[type=checkbox]:checked'))
         .map((cb) => cb.value);
@@ -389,6 +405,7 @@
         deadline: f.get('deadline') || '',
         start_date: f.get('start_date') || '',
         is_poc: f.get('is_poc') === 'on',
+        is_hourly_billing: f.get('is_hourly_billing') === 'on',
         contacts,
         team,
         team_allocations,

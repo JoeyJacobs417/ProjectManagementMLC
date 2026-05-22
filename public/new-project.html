@@ -60,7 +60,9 @@
         <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500">
           <input type="checkbox" name="is_poc" style="width:auto"> Dit is een POC
         </label>
-        <label></label>
+        <label style="align-self:end; display:flex; flex-direction:row; align-items:center; gap:.4rem; font-weight:500" title="Geen urenlimiet; uren zijn altijd declarabel en tellen altijd mee in de omzetvoorspelling.">
+          <input type="checkbox" name="is_hourly_billing" style="width:auto"> Uurtje-factuurtje
+        </label>
         <label></label>
       </div>
 
@@ -90,11 +92,17 @@
 
       <h4>Contactpersonen bij de klant</h4>
       <table class="table">
-        <thead><tr><th>Naam</th><th>E-mailadres</th><th></th></tr></thead>
+        <thead><tr><th>Naam</th><th>E-mailadres</th><th>Taal</th><th></th></tr></thead>
         <tbody id="contactsBody">
           <tr>
             <td><input type="text" data-contact="name"></td>
             <td><input type="email" data-contact="email"></td>
+            <td>
+              <select data-contact="language" style="width:auto">
+                <option value="nl" selected>Nederlands</option>
+                <option value="en">Engels</option>
+              </select>
+            </td>
             <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
           </tr>
         </tbody>
@@ -243,6 +251,12 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     tr.innerHTML = `
       <td><input type="text" data-contact="name"></td>
       <td><input type="email" data-contact="email"></td>
+      <td>
+        <select data-contact="language" style="width:auto">
+          <option value="nl" selected>Nederlands</option>
+          <option value="en">Engels</option>
+        </select>
+      </td>
       <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>`;
     tbody.appendChild(tr);
     bindContactRow(tr);
@@ -323,8 +337,9 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
     for (const tr of document.querySelectorAll('#contactsBody tr')) {
       const name = tr.querySelector('[data-contact=name]').value.trim();
       const email = tr.querySelector('[data-contact=email]').value.trim();
+      const language = tr.querySelector('[data-contact=language]').value === 'en' ? 'en' : 'nl';
       if (!name && !email) continue;
-      contacts.push({ name, email });
+      contacts.push({ name, email, language });
     }
 
     const phases = [];
@@ -353,6 +368,7 @@ Antwoord met JSON in exact deze structuur. Onbekend = 0 of leeg.`;
       deadline: f.get('deadline') || '',
       start_date: f.get('start_date') || '',
       is_poc: f.get('is_poc') === 'on',
+      is_hourly_billing: f.get('is_hourly_billing') === 'on',
       feature_requests: f.get('feature_requests') || '',
       contacts,
       team,
