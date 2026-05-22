@@ -106,14 +106,14 @@
     // Medewerkers op actieve uurtje-factuurtje-projecten lopen per definitie niet uit hun werk.
     const hourlyMembers = new Set();
     for (const p of baseProjects) {
-      if (p.status !== 'in_progress' && p.status !== 'future') continue;
+      if (p.status !== 'in_progress' && p.status !== 'future' && p.status !== 'recurring') continue;
       if (!p.is_hourly_billing) continue;
       for (const t of (p.team || [])) hourlyMembers.add(t.moneybird_user_id);
     }
 
     const byEmp = new Map();
     for (const p of baseProjects) {
-      if (p.status !== 'in_progress' && p.status !== 'future') continue;
+      if (p.status !== 'in_progress' && p.status !== 'future' && p.status !== 'recurring') continue;
       if (p.is_hourly_billing) continue;
       for (const t of (p.team || [])) {
         if (!dashboardEmps.has(t.moneybird_user_id)) continue;
@@ -295,7 +295,7 @@
       }
     }
 
-    const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future');
+    const inProgress = projects.filter((p) => p.status === 'in_progress' || p.status === 'future' || p.status === 'recurring');
 
     function ensurePerPersonRec(id, name) {
       if (!perPerson.has(id)) {

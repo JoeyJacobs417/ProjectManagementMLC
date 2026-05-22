@@ -105,6 +105,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 .status-on_hold     { background: rgba(245, 158, 11, .12); color: #b45309; }
 .status-done        { background: rgba(16, 185, 129, .12); color: #047857; }
 .status-future      { background: rgba(100, 116, 139, .12); color: #475569; }
+.status-recurring   { background: rgba(168, 85, 247, .12); color: #7e22ce; }
 
 .checkbox-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

@@ -36,7 +36,14 @@
           <option value="on_hold">On hold</option>
           <option value="done">Done</option>
           <option value="future">Future</option>
+          <option value="recurring">Recurring</option>
         </select>
+      </label>
+      <label style="display:flex; flex-direction:row; align-items:center; gap:.4rem; margin:0; font-weight:500">
+        <input type="checkbox" id="filterPoc" style="width:auto"> Alleen POC
+      </label>
+      <label style="display:flex; flex-direction:row; align-items:center; gap:.4rem; margin:0; font-weight:500">
+        <input type="checkbox" id="filterRecurring" style="width:auto"> Alleen Recurring
       </label>
       <span class="subtle" id="filterCount"></span>
     </div>
@@ -96,10 +103,16 @@
   const STORAGE_STATUS = 'pm_projects_status_filter';
   const STORAGE_QUERY = 'pm_projects_query';
   const STORAGE_SORT_DIR = 'pm_projects_pct_sort_dir';
+  const STORAGE_POC = 'pm_projects_filter_poc';
+  const STORAGE_RECURRING = 'pm_projects_filter_recurring';
   const status = document.getElementById('statusFilter');
   const search = document.getElementById('searchInput');
+  const filterPoc = document.getElementById('filterPoc');
+  const filterRecurring = document.getElementById('filterRecurring');
   status.value = sessionStorage.getItem(STORAGE_STATUS) || 'all';
   search.value = sessionStorage.getItem(STORAGE_QUERY) || '';
+  filterPoc.checked = sessionStorage.getItem(STORAGE_POC) === '1';
+  filterRecurring.checked = sessionStorage.getItem(STORAGE_RECURRING) === '1';
   // 0 = niet sorteren, 1 = oplopend, -1 = aflopend
   let pctSortDir = Number(sessionStorage.getItem(STORAGE_SORT_DIR)) || 0;
 
@@ -139,17 +152,29 @@
   function render() {
     const statusVal = status.value;
     const q = search.value.trim().toLowerCase();
+    const onlyPoc = filterPoc.checked;
+    const onlyRecurring = filterRecurring.checked;
     sessionStorage.setItem(STORAGE_STATUS, statusVal);
     sessionStorage.setItem(STORAGE_QUERY, q);
+    sessionStorage.setItem(STORAGE_POC, onlyPoc ? '1' : '0');
+    sessionStorage.setItem(STORAGE_RECURRING, onlyRecurring ? '1' : '0');
 
     const filtered = projects.filter((p) => {
       if (statusVal !== 'all' && (p.status || 'in_progress') !== statusVal) return false;
+      if (onlyPoc && !p.is_poc) return false;
+      if (onlyRecurring && p.status !== 'recurring') return false;
       if (!matchSearch(p, q)) return false;
       return true;
     });
 
     if (pctSortDir !== 0) {
-      filtered.sort((a, b) => pctSortDir * ((Number(a.percentage_used) || 0) - (Number(b.percentage_used) || 0)));
+      filtered.sort((a, b) => {
+        // Uurtje-factuurtje projecten hebben geen %, sorteren altijd onderaan.
+        if (a.is_hourly_billing && !b.is_hourly_billing) return 1;
+        if (!a.is_hourly_billing && b.is_hourly_billing) return -1;
+        if (a.is_hourly_billing && b.is_hourly_billing) return 0;
+        return pctSortDir * ((Number(a.percentage_used) || 0) - (Number(b.percentage_used) || 0));
+      });
     }
 
     document.getElementById('filterCount').textContent =
@@ -182,8 +207,8 @@
                 <td>${modulesCell(p.modules)}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>
                 <td>${teamCell(p.team)}</td>
-                <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
-                <td><span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span></td>
+                <td>${p.is_hourly_billing ? `${p.hours_used.toFixed(1)} u <span class="subtle">(uurtje-factuurtje)</span>` : `${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u`}</td>
+                <td>${p.is_hourly_billing ? '<span class="subtle">N/A</span>' : `<span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span>`}</td>
                 <td style="text-align:center">${pdfCell}</td>
               </tr>`;
           }).join('')}
@@ -208,6 +233,8 @@
 
   status.addEventListener('change', render);
   search.addEventListener('input', render);
+  filterPoc.addEventListener('change', render);
+  filterRecurring.addEventListener('change', render);
   await loadAll();
 </script>
 </body></html>

@@ -18,7 +18,7 @@ import {
 } from '../../../lib/db.js';
 import { diffProjectActivity, appendActivity, logActivity } from '../../../lib/activity.js';
 
-const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
+const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future', 'recurring'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 const EDITABLE_FIELDS = [
   'name', 'description', 'available_hours', 'hourly_rate',

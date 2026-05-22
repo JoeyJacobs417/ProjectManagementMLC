@@ -31,8 +31,8 @@
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel, isDutchHoliday, holidaysBetween } from '/app.js';
   const me = await renderTopbar('/planning.html');
 
-  const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future']);
-  const ACTIVE_STATUSES = new Set(['in_progress', 'future']);
+  const PLANNING_STATUSES = new Set(['in_progress', 'on_hold', 'future', 'recurring']);
+  const ACTIVE_STATUSES = new Set(['in_progress', 'future', 'recurring']);
   const WEEKS_BACK = 4;
 
   function todayIso() { const d = new Date(); d.setHours(0,0,0,0); return d.toISOString().slice(0,10); }
@@ -218,7 +218,7 @@
 
     const today = todayIso();
     c.innerHTML = shown.map((e) => {
-      const order = { in_progress: 0, future: 1, on_hold: 2 };
+      const order = { in_progress: 0, recurring: 1, future: 2, on_hold: 3 };
       const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
       const cap = Number(capacities[e.id]) || 0;
       const periods = vacationsByEmp[e.id] || [];

@@ -20,7 +20,7 @@ import {
 import { logActivity } from '../../lib/activity.js';
 
 const kv = Redis.fromEnv();
-const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future'];
+const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future', 'recurring'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
 function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }

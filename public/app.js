@@ -53,6 +53,7 @@ export const STATUS_OPTIONS = [
   { value: 'on_hold',     label: 'On hold' },
   { value: 'done',        label: 'Done' },
   { value: 'future',      label: 'Future' },
+  { value: 'recurring',   label: 'Recurring' },
 ];
 export function statusLabel(value) {
   const opt = STATUS_OPTIONS.find((o) => o.value === value);
