@@ -38,15 +38,32 @@
       <h4>Periodieke rapportage</h4>
       <div class="form-row">
         <label>Periode
-          <select name="report_period">
+          <select name="report_period" id="reportPeriodSel">
             <option value="off">Uit</option>
-            <option value="weekly">Wekelijks (maandag)</option>
-            <option value="monthly">Maandelijks (1e van de maand)</option>
+            <option value="weekly">Wekelijks</option>
+            <option value="monthly">Maandelijks</option>
           </select>
         </label>
+        <label id="reportDowWrap">Dag van de week
+          <select name="report_day_of_week">
+            <option value="1">Maandag</option>
+            <option value="2">Dinsdag</option>
+            <option value="3">Woensdag</option>
+            <option value="4">Donderdag</option>
+            <option value="5">Vrijdag</option>
+            <option value="6">Zaterdag</option>
+            <option value="0">Zondag</option>
+          </select>
+        </label>
+        <label id="reportDomWrap">Dag van de maand
+          <select name="report_day_of_month"></select>
+        </label>
+      </div>
+      <div class="form-row">
         <label>Ontvangers (komma-gescheiden)
           <input type="text" name="report_recipients" placeholder="bv. joey@bedrijf.nl">
         </label>
+        <label></label>
         <label></label>
       </div>
       <div>
@@ -114,14 +131,31 @@
   ]);
   const activeAdmins = (allUsers || []).filter((u) => u.role === 'admin' && u.active);
 
+  // Vul dag-van-de-maand dropdown (1-28; voorbij 28 wordt in cron geclampt aan einde maand).
+  const domSel = document.querySelector('[name=report_day_of_month]');
+  for (let i = 1; i <= 28; i++) {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = String(i);
+    domSel.appendChild(o);
+  }
+
   for (const k of [
     'threshold_warning', 'threshold_critical', 'threshold_exceeded',
     'inactivity_days', 'deadline_alert_days', 'notify_emails_extra',
     'report_period', 'report_recipients',
+    'report_day_of_week', 'report_day_of_month',
   ]) {
     const el = document.querySelector(`[name=${k}]`);
     if (el) el.value = settings[k] ?? '';
   }
+
+  function updateReportDayVisibility() {
+    const v = document.getElementById('reportPeriodSel').value;
+    document.getElementById('reportDowWrap').style.display = v === 'weekly' ? '' : 'none';
+    document.getElementById('reportDomWrap').style.display = v === 'monthly' ? '' : 'none';
+  }
+  updateReportDayVisibility();
+  document.getElementById('reportPeriodSel').addEventListener('change', updateReportDayVisibility);
 
   function updateRecipientsPreview() {
     const extra = (document.querySelector('[name=notify_emails_extra]').value || '')
@@ -151,6 +185,8 @@
       notify_emails_extra: f.get('notify_emails_extra'),
       report_period: f.get('report_period'),
       report_recipients: f.get('report_recipients'),
+      report_day_of_week: f.get('report_day_of_week'),
+      report_day_of_month: f.get('report_day_of_month'),
     });
   }
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {

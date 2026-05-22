@@ -153,6 +153,14 @@ export default async function handler(req, res) {
       patch.report_period = REPORT_PERIODS.includes(v) ? v : 'off';
     }
     if (b.report_recipients !== undefined) patch.report_recipients = String(b.report_recipients || '').trim();
+    if (b.report_day_of_week !== undefined) {
+      const n = Math.trunc(Number(b.report_day_of_week));
+      patch.report_day_of_week = Number.isFinite(n) && n >= 0 && n <= 6 ? n : 1;
+    }
+    if (b.report_day_of_month !== undefined) {
+      const n = Math.trunc(Number(b.report_day_of_month));
+      patch.report_day_of_month = Number.isFinite(n) && n >= 1 && n <= 28 ? n : 1;
+    }
     if (b.employee_capacities !== undefined) patch.employee_capacities = normalizeCapacities(b.employee_capacities);
     if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
     if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);
