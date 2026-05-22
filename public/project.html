@@ -120,34 +120,6 @@
       </div>
 
       <div class="card-static" style="margin-top:1rem">
-        <h3>Beschrijving</h3>
-        <p>${escapeHtml(project.description || '—')}</p>
-        ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
-        ${project.feature_requests ? `<h3>Feature requests</h3><p style="white-space:pre-wrap">${escapeHtml(project.feature_requests)}</p>` : ''}
-        ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
-        ${(project.contacts && project.contacts.length) ? `
-          <h3>Contactpersonen</h3>
-          <ul style="margin:.25rem 0 0; padding-left:1.2rem">
-            ${project.contacts.map((c) => `
-              <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
-          </ul>` : ''}
-      </div>
-
-      <h2>Offerte / voorstel-PDF</h2>
-      <div class="card-static">
-        ${project.has_pdf
-          ? `<p>Er is een PDF opgeslagen: <strong>${escapeHtml(project.source_pdf_filename || 'offerte.pdf')}</strong>.
-             <a href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>Download</a>.</p>`
-          : '<p class="subtle">Nog geen PDF gekoppeld aan dit project.</p>'}
-        <form id="pdfUploadForm" class="form" style="margin-top:.5rem">
-          <label>${project.has_pdf ? 'Vervang' : 'Upload'} PDF
-            <input type="file" name="pdf" accept="application/pdf" required>
-          </label>
-          <div><button class="btn btn-primary" type="submit">Upload PDF</button></div>
-        </form>
-      </div>
-
-      <div class="card-static" style="margin-top:1rem">
         <h3>Project bewerken</h3>
         <form id="editForm" class="form">
           <label>Korte beschrijving<textarea name="description" rows="3">${escapeHtml(project.description || '')}</textarea></label>
@@ -200,6 +172,7 @@
           <button type="button" class="btn btn-ghost" id="addContact">+ Contact toevoegen</button>
 
           <h4>Team</h4>
+          <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">Vink medewerkers aan en geef per medewerker het aantal toegewezen uren op (laat leeg als niet van toepassing).</p>
           <div id="teamGrid" class="checkbox-grid"><span class="subtle">Medewerkers laden…</span></div>
 
           <div style="margin-top:1rem">
@@ -229,6 +202,34 @@
 
       <h2>Uren in de tijd</h2>
       <div class="card-static"><canvas id="hoursOverTime" height="120"></canvas></div>
+
+      <h2>Beschrijving</h2>
+      <div class="card-static">
+        <p>${escapeHtml(project.description || '—')}</p>
+        ${project.exceptions ? `<h3>Uitzonderingen / afspraken</h3><p>${escapeHtml(project.exceptions)}</p>` : ''}
+        ${project.feature_requests ? `<h3>Feature requests</h3><p style="white-space:pre-wrap">${escapeHtml(project.feature_requests)}</p>` : ''}
+        ${project.source_pdf_filename ? `<p class="subtle">Bron-PDF: ${escapeHtml(project.source_pdf_filename)}${project.has_pdf ? '' : ' (niet meer beschikbaar)'}</p>` : ''}
+        ${(project.contacts && project.contacts.length) ? `
+          <h3>Contactpersonen</h3>
+          <ul style="margin:.25rem 0 0; padding-left:1.2rem">
+            ${project.contacts.map((c) => `
+              <li>${escapeHtml(c.name || '')}${c.email ? ` — <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : ''}${c.receives_threshold_mails ? ' <span class="badge badge-blue" title="ontvangt urenverbruik-mails">📧 alerts</span>' : ''}</li>`).join('')}
+          </ul>` : ''}
+      </div>
+
+      <h2>Offerte / voorstel-PDF</h2>
+      <div class="card-static">
+        ${project.has_pdf
+          ? `<p>Er is een PDF opgeslagen: <strong>${escapeHtml(project.source_pdf_filename || 'offerte.pdf')}</strong>.
+             <a href="/api/projects/${encodeURIComponent(id)}?action=download_pdf" download>Download</a>.</p>`
+          : '<p class="subtle">Nog geen PDF gekoppeld aan dit project.</p>'}
+        <form id="pdfUploadForm" class="form" style="margin-top:.5rem">
+          <label>${project.has_pdf ? 'Vervang' : 'Upload'} PDF
+            <input type="file" name="pdf" accept="application/pdf" required>
+          </label>
+          <div><button class="btn btn-primary" type="submit">Upload PDF</button></div>
+        </form>
+      </div>
 
       <h2>Activiteit</h2>
       <div class="card-static">
@@ -314,15 +315,21 @@
     const teamGrid = document.getElementById('teamGrid');
     apiGet('/api/moneybird/employees').then(({ employees }) => {
       const checkedIds = new Set((project.team || []).map((t) => t.moneybird_user_id));
+      const allocByEmpId = new Map((project.team_allocations || []).map((a) => [a.moneybird_user_id, Number(a.allocated_hours) || 0]));
       if (employees.length === 0) {
         teamGrid.innerHTML = '<span class="subtle">Geen medewerkers gevonden.</span>';
         return;
       }
-      teamGrid.innerHTML = employees.map((e) => `
-        <label>
+      teamGrid.innerHTML = employees.map((e) => {
+        const alloc = allocByEmpId.get(e.id);
+        const allocVal = (alloc != null && alloc > 0) ? alloc : '';
+        return `
+        <label style="display:flex; gap:.5rem; align-items:center">
           <input type="checkbox" data-emp-id="${e.id}" data-emp-name="${(e.name || '').replace(/"/g, '&quot;')}" ${checkedIds.has(e.id) ? 'checked' : ''}>
-          ${escapeHtml(e.name)}
-        </label>`).join('');
+          <span style="flex:1">${escapeHtml(e.name)}</span>
+          <input type="number" step="0.5" min="0" data-alloc-id="${e.id}" value="${allocVal}" placeholder="uren" style="width:90px" title="Toegewezen uren voor ${escapeHtml(e.name)}">
+        </label>`;
+      }).join('');
     }).catch((err) => { teamGrid.innerHTML = `<span class="subtle">Fout: ${err.message}</span>`; });
 
     function bindContactRow(tr) {
@@ -353,6 +360,13 @@
       const f = new FormData(e.target);
       const team = Array.from(document.querySelectorAll('#teamGrid input[type=checkbox]:checked'))
         .map((cb) => ({ moneybird_user_id: cb.dataset.empId, name: cb.dataset.empName }));
+      const team_allocations = [];
+      for (const cb of document.querySelectorAll('#teamGrid input[type=checkbox]:checked')) {
+        const id = cb.dataset.empId;
+        const input = document.querySelector(`#teamGrid input[data-alloc-id="${id}"]`);
+        const h = Number(input?.value);
+        if (Number.isFinite(h) && h > 0) team_allocations.push({ moneybird_user_id: id, allocated_hours: h });
+      }
       const contacts = [];
       for (const tr of document.querySelectorAll('#contactsBody tr')) {
         const name = tr.querySelector('[data-contact=name]').value.trim();
@@ -377,6 +391,7 @@
         is_poc: f.get('is_poc') === 'on',
         contacts,
         team,
+        team_allocations,
       };
       if (canEditManager) body.manager_id = f.get('manager_id') || null;
       try {

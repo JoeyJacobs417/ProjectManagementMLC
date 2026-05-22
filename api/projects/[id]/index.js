@@ -42,6 +42,22 @@ function normalizeTeam(input) {
   return out;
 }
 
+function normalizeTeamAllocations(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const a of input) {
+    if (!a) continue;
+    const id = String(a.moneybird_user_id || '').trim();
+    const h = Number(a.allocated_hours);
+    if (!id || seen.has(id)) continue;
+    if (!Number.isFinite(h) || h < 0) continue;
+    seen.add(id);
+    out.push({ moneybird_user_id: id, allocated_hours: Math.round(h * 100) / 100 });
+  }
+  return out;
+}
+
 function normalizeContacts(input) {
   if (!Array.isArray(input)) return [];
   const out = [];
@@ -101,6 +117,7 @@ async function buildDetail(project) {
     feature_requests: project.feature_requests || '',
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
+    team_allocations: Array.isArray(project.team_allocations) ? project.team_allocations : [],
     notes: Array.isArray(project.notes) ? project.notes : [],
     activity_log: Array.isArray(project.activity_log) ? project.activity_log : [],
     last_synced_at: project.last_synced_at || null,
@@ -224,6 +241,7 @@ export default async function handler(req, res) {
     if (b.is_poc !== undefined) project.is_poc = !!b.is_poc;
     if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
+    if (b.team_allocations !== undefined) project.team_allocations = normalizeTeamAllocations(b.team_allocations);
     if (typeof project.available_hours === 'string') project.available_hours = Number(project.available_hours) || 0;
     if (typeof project.hourly_rate === 'string') project.hourly_rate = Number(project.hourly_rate) || 0;
 

@@ -34,8 +34,8 @@
         Target (€):
         <input type="number" id="forecastTarget" min="0" step="100" style="width:140px" placeholder="bv. 75000">
       </label>
-      <span class="subtle" id="forecastTotal" style="margin-left:auto"></span>
     </div>
+    <div id="forecastTotal" class="subtle" style="margin-top:.6rem; display:flex; flex-wrap:wrap; gap:.4rem 1rem; align-items:baseline"></div>
   </div>
   <div id="forecast"><p class="subtle">Laden…</p></div>
 
@@ -397,10 +397,10 @@
       const label = onTarget
         ? `target ${fmtEuro(target)} gehaald (+${fmtEuro(Math.max(0, diff))})`
         : `tekort ${fmtEuro(Math.abs(diff))} op target ${fmtEuro(target)}`;
-      targetHtml = ` · <strong style="color:${color}">${icon} ${pct}% — ${label}</strong>`;
+      targetHtml = `<span style="color:${color}; font-weight:600">${icon} ${pct}% — ${label}</span>`;
     }
     document.getElementById('forecastTotal').innerHTML =
-      ` · Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong>${targetHtml}`;
+      `<span>Totaal verwachte omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong></span>${targetHtml}`;
 
     const el = document.getElementById('forecast');
     if (rows.length === 0) {

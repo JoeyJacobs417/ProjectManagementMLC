@@ -58,12 +58,12 @@
     weekStarts.push(dateToIso(d));
   }
 
-  // BELANGRIJK: geen user_id-parameter; filteren doen we client-side.
-  // De server-side user_id-filter raakt de pre-warm bulk niet (die wordt
-  // alleen zonder user_id gevuld) en de live-fetch met user_id:<id> is
-  // niet altijd betrouwbaar. We hergebruiken hier dezelfde aanpak als de
-  // oude planning-pagina deed: 1× alles ophalen, client-side filteren.
-  const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}`;
+  // BELANGRIJK: user_id meesturen zodat Moneybird alleen de uren van DEZE
+  // medewerker teruggeeft. Zonder user_id wordt álles opgehaald — bij een
+  // koude cache leidt dat tot een 429 (rate limit) bij Moneybird.
+  // Server-side wordt eerst de pre-warm bulk-cache gefilterd op user_id;
+  // bij cache-miss valt hij terug op een gerichte live-fetch met user_id-filter.
+  const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}&user_id=${encodeURIComponent(empId)}`;
 
   let trackedProjects = [];
   let mbResp = null;
@@ -90,6 +90,8 @@
     if (p.moneybird_project_id) trackedByMbId.set(String(p.moneybird_project_id), p);
   }
 
+  // De server filtert al op user_id, maar voor de zekerheid filteren we
+  // hier nogmaals zodat alleen entries van deze medewerker tellen.
   const allEntries = mbResp.time_entries || [];
   const entries = allEntries.filter((e) => String(e.user_moneybird_id || '') === String(empId));
 
@@ -123,16 +125,12 @@
   const grouped = Array.from(byProject.values()).sort((a, b) => b.total - a.total);
   const grandTotal = grouped.reduce((a, g) => a + g.total, 0);
 
-  const debugInfo = `${allEntries.length} entries opgehaald, ${entries.length} voor deze medewerker`;
   document.getElementById('empMeta').textContent =
-    `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))} · ${debugInfo}`;
+    `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))}`;
 
   const c = document.getElementById('content');
   if (grouped.length === 0) {
-    const hint = allEntries.length === 0
-      ? 'Moneybird gaf 0 entries terug voor deze periode. Mogelijk is de pre-warm cache nog leeg (cron heeft nog niet gedraaid).'
-      : `Wel ${allEntries.length} entries opgehaald, maar geen daarvan heeft user_moneybird_id "${escapeHtml(empId)}". Controleer of de ID klopt.`;
-    c.innerHTML = `<p class="subtle">Geen uren gevonden in deze periode.<br><span style="font-size:.85rem">${hint}</span></p>`;
+    c.innerHTML = '<p class="subtle">Geen uren geschreven in deze periode.</p>';
   } else {
     c.innerHTML = `
       <table class="table">
