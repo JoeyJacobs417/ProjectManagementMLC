@@ -118,30 +118,30 @@ export default async function handler(req, res) {
           res.status(200).json({ time_entries, since, cached_at: recent.cached_at });
           return;
         }
-        // 2) Per-since cache (10 min TTL).
-        const cached = await getCachedMoneybirdTimeEntries(since, userId);
-        if (cached) {
+        // 2) Per-since cache (10 min TTL) — alleen de "alles"-variant; user-filter doen we in-memory.
+        const cached = await getCachedMoneybirdTimeEntries(since, null);
+        if (cached && Array.isArray(cached.time_entries)) {
+          const time_entries = filterEntries(cached.time_entries, since, userId);
           res.setHeader('X-Cache', 'HIT');
           res.setHeader('X-Source', 'redis-per-since');
-          res.status(200).json(cached);
+          res.status(200).json({ time_entries, since, cached_at: cached.cached_at });
           return;
         }
       }
 
-      const filters = [`started_after:${since}`];
-      if (userId) filters.push(`user_id:${userId}`);
-      const raw = await fetchAllTimeEntriesWithFilter(filters.join(','));
-      const time_entries = raw.map(normalizeTimeEntry);
-      const payload = { time_entries, since, cached_at: new Date().toISOString() };
-      await setCachedMoneybirdTimeEntries(since, userId, payload);
-      // Bij een refresh zonder user-filter: ook de pre-warm bulk vernieuwen, zodat
-      // volgende paginabezoeken direct uit Redis komen.
-      if (noCache && !userId) {
-        try { await setRecentMoneybirdEntries(payload); } catch {}
-      }
+      // Live fetch — nooit met user_id-filter, want Moneybird's user_id-filter accepteert
+      // onze administration-user-id niet (geeft 404 record not found). We halen alle entries
+      // van de afgelopen periode op, vullen de bulk-cache, en filteren daarna in-memory.
+      const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since}`);
+      const all_entries = raw.map(normalizeTimeEntry);
+      const fullPayload = { time_entries: all_entries, since, cached_at: new Date().toISOString() };
+      await setCachedMoneybirdTimeEntries(since, null, fullPayload);
+      try { await setRecentMoneybirdEntries(fullPayload); } catch {}
+
+      const time_entries = filterEntries(all_entries, since, userId);
       res.setHeader('X-Cache', 'MISS');
       res.setHeader('X-Source', 'moneybird-live');
-      res.status(200).json(payload);
+      res.status(200).json({ time_entries, since, cached_at: fullPayload.cached_at });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
