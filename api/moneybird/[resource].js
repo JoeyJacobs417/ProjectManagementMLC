@@ -118,7 +118,17 @@ export default async function handler(req, res) {
           res.status(200).json({ time_entries, since, cached_at: recent.cached_at });
           return;
         }
-        // 2) Per-since cache (10 min TTL) — alleen de "alles"-variant; user-filter doen we in-memory.
+        // 2a) User-specifieke per-since cache (10 min TTL) — al gefilterd.
+        if (userId) {
+          const cachedUser = await getCachedMoneybirdTimeEntries(since, userId);
+          if (cachedUser && Array.isArray(cachedUser.time_entries)) {
+            res.setHeader('X-Cache', 'HIT');
+            res.setHeader('X-Source', 'redis-per-since-user');
+            res.status(200).json(cachedUser);
+            return;
+          }
+        }
+        // 2b) Bulk per-since cache — filter in-memory.
         const cached = await getCachedMoneybirdTimeEntries(since, null);
         if (cached && Array.isArray(cached.time_entries)) {
           const time_entries = filterEntries(cached.time_entries, since, userId);
@@ -129,9 +139,28 @@ export default async function handler(req, res) {
         }
       }
 
-      // Live fetch — nooit met user_id-filter, want Moneybird's user_id-filter accepteert
-      // onze administration-user-id niet (geeft 404 record not found). We halen alle entries
-      // van de afgelopen periode op, vullen de bulk-cache, en filteren daarna in-memory.
+      // Live fetch: probeer eerst met user_id-filter (snel — alleen die ene medewerker).
+      // Als Moneybird 404 "user_id: not_found" teruggeeft (gebeurt voor users die wel in
+      // time entries voorkomen maar niet als AdministrationUser bestaan), vallen we terug
+      // op een bulk-fetch zonder filter en filteren we daarna in-memory.
+      if (userId) {
+        try {
+          const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since},user_id:${userId}`);
+          const time_entries = raw.map(normalizeTimeEntry);
+          const filtered = filterEntries(time_entries, since, userId);
+          const payload = { time_entries: filtered, since, cached_at: new Date().toISOString() };
+          await setCachedMoneybirdTimeEntries(since, userId, payload);
+          res.setHeader('X-Cache', 'MISS');
+          res.setHeader('X-Source', 'moneybird-live-user');
+          res.status(200).json(payload);
+          return;
+        } catch (err) {
+          if (!/Moneybird 404/.test(err.message)) throw err;
+          // 404 → user_id wordt niet door de filter herkend; fall back op bulk.
+        }
+      }
+
+      // Bulk-fetch (zonder user_id-filter) — vult ook de pre-warm cache voor toekomstige requests.
       const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since}`);
       const all_entries = raw.map(normalizeTimeEntry);
       const fullPayload = { time_entries: all_entries, since, cached_at: new Date().toISOString() };
@@ -140,7 +169,7 @@ export default async function handler(req, res) {
 
       const time_entries = filterEntries(all_entries, since, userId);
       res.setHeader('X-Cache', 'MISS');
-      res.setHeader('X-Source', 'moneybird-live');
+      res.setHeader('X-Source', userId ? 'moneybird-live-bulk-fallback' : 'moneybird-live-bulk');
       res.status(200).json({ time_entries, since, cached_at: fullPayload.cached_at });
     } catch (err) {
       res.status(500).json({ error: err.message });
