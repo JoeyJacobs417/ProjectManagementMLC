@@ -137,16 +137,39 @@ export default async function handler(req, res) {
       }
 
       // ─── Pass 2: Moneybird live met user_id-filter (alleen als cache leeg) ─
+      // Probeert eerst de meegegeven user_id (AdministrationUser-id uit /users.json).
+      // Bij 404: zoekt in de lokale cache naar een entry van deze user en pakt diens
+      // top-level user_id (uit time-entry data) — Moneybird's filter accepteert vaak
+      // alleen die. Probeert maximaal 2 filter-keys.
       if (userId) {
+        const filterCandidates = [userId];
         try {
-          const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since},user_id:${userId}`);
-          const time_entries = raw.map(normalizeTimeEntry).filter(inWindow);
-          res.setHeader('X-Source', 'moneybird-live-user');
-          res.status(200).json({ time_entries, since, source: 'moneybird-live-user' });
-          return;
-        } catch (err) {
-          if (!/Moneybird 404/.test(err.message)) throw err;
+          const projects = await listProjects();
+          const entriesByProject = await listTimeEntriesBatch(projects.map((p) => p.id));
+          for (const entries of entriesByProject.values()) {
+            const found = entries.find((e) =>
+              String(e.user_moneybird_id || '') === userId && e.user_top_id && e.user_top_id !== userId
+            );
+            if (found) { filterCandidates.push(found.user_top_id); break; }
+          }
+        } catch {}
+
+        let lastErr = null;
+        for (const candidate of filterCandidates) {
+          try {
+            const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since},user_id:${candidate}`);
+            const time_entries = raw.map(normalizeTimeEntry).filter(inWindow);
+            res.setHeader('X-Source', 'moneybird-live-user');
+            res.setHeader('X-User-Filter-Id', candidate);
+            res.status(200).json({ time_entries, since, source: 'moneybird-live-user', used_filter_id: candidate });
+            return;
+          } catch (err) {
+            lastErr = err;
+            if (!/Moneybird 404/.test(err.message)) throw err;
+            // 404: probeer volgende kandidaat
+          }
         }
+        // Beide kandidaten faalden met 404 → val door naar pass 3.
       }
 
       // ─── Pass 3: lokale per-project cache (alleen tracked) ───────────────
