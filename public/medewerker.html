@@ -16,7 +16,8 @@
       <a class="btn btn-ghost" href="/planning.html">← Planning</a>
     </div>
   </div>
-  <p class="subtle">Alle uren geschreven in Moneybird in de afgelopen 4 weken (inclusief de huidige week), gegroepeerd per Moneybird-project.</p>
+  <p class="subtle">Alle uren geschreven in Moneybird in de afgelopen 4 weken (inclusief de huidige week), gegroepeerd per Moneybird-project. Inclusief uren op projecten die niet in deze app gekoppeld zijn.</p>
+  <p class="subtle" id="sourceBanner" style="margin-top:.25rem; font-size:.8rem"></p>
 
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
@@ -58,11 +59,11 @@
     weekStarts.push(dateToIso(d));
   }
 
-  // BELANGRIJK: user_id meesturen zodat Moneybird alleen de uren van DEZE
-  // medewerker teruggeeft. Zonder user_id wordt álles opgehaald — bij een
-  // koude cache leidt dat tot een 429 (rate limit) bij Moneybird.
-  // Server-side wordt eerst de pre-warm bulk-cache gefilterd op user_id;
-  // bij cache-miss valt hij terug op een gerichte live-fetch met user_id-filter.
+  // user_id meesturen zodat de server een 3-pass aanpak doet:
+  //   1) bulk-cache (instant als gevuld door cron) → compleet incl. ongekoppelde projecten
+  //   2) live Moneybird met user_id-filter (snel als Moneybird de user kent) → compleet
+  //   3) fallback: lokale per-project cache (alleen tracked) → instant maar niet compleet
+  // De source van de data wordt in mbResp.source teruggegeven.
   const mbUrl = `/api/moneybird/time_entries?since=${encodeURIComponent(sinceIso)}&user_id=${encodeURIComponent(empId)}`;
 
   let trackedProjects = [];
@@ -90,10 +91,23 @@
     if (p.moneybird_project_id) trackedByMbId.set(String(p.moneybird_project_id), p);
   }
 
-  // De server filtert al op user_id, maar voor de zekerheid filteren we
-  // hier nogmaals zodat alleen entries van deze medewerker tellen.
   const allEntries = mbResp.time_entries || [];
   const entries = allEntries.filter((e) => String(e.user_moneybird_id || '') === String(empId));
+
+  // Toon waar de data vandaan komt (en eventuele waarschuwing als 't onvolledig is).
+  const banner = document.getElementById('sourceBanner');
+  const src = mbResp.source || '';
+  const cachedAt = mbResp.cached_at ? new Date(mbResp.cached_at).toLocaleString('nl-NL') : '';
+  if (src === 'cache') {
+    banner.innerHTML = `<span style="color:#047857">✓ Compleet${cachedAt ? ' · cache laatst gevuld ' + cachedAt : ''}</span>`;
+  } else if (src === 'cache-partial') {
+    const cov = mbResp.coverage_since ? fmtDateShort(mbResp.coverage_since) : '?';
+    banner.innerHTML = `<span style="color:#b45309">⚠ Cache nog niet helemaal opgebouwd — bevat entries vanaf <strong>${cov}</strong>. Elke nacht komt er 7 dagen historie bij; binnen een paar dagen zit hier de volledige 4 weken in.</span>`;
+  } else if (src === 'moneybird-live-user') {
+    banner.innerHTML = `<span style="color:#047857">✓ Compleet (live opgehaald)</span>`;
+  } else if (src === 'local-tracked-only') {
+    banner.innerHTML = `<span style="color:#b45309">⚠ Bulk-cache leeg en de Moneybird user-filter werkt niet voor deze medewerker. Alleen uren op gekoppelde projecten zichtbaar.</span>`;
+  }
 
   // Naam fallback: uit URL → uit eerste entry → 'Onbekend'
   let empName = empNameFromUrl || '';
@@ -130,7 +144,7 @@
 
   const c = document.getElementById('content');
   if (grouped.length === 0) {
-    c.innerHTML = '<p class="subtle">Geen uren geschreven in deze periode.</p>';
+    c.innerHTML = `<p class="subtle">Geen uren gevonden in deze periode.</p>`;
   } else {
     c.innerHTML = `
       <table class="table">

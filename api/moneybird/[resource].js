@@ -1,6 +1,6 @@
 // GET /api/moneybird/projects                                - lijst Moneybird-projecten
 // GET /api/moneybird/employees                               - lijst medewerkers (incl. email + voornaam)
-// GET /api/moneybird/time_entries?since=YYYY-MM-DD&user_id=X - alle time entries sinds datum (gecached)
+// GET /api/moneybird/time_entries?since=YYYY-MM-DD&user_id=X - time entries (3-pass: bulk-cache → Moneybird user-filter → lokaal)
 import { requireUser } from '../../lib/auth.js';
 import {
   fetchProjects,
@@ -11,12 +11,9 @@ import {
 import {
   listProjects,
   listTimeEntriesBatch,
-  getCachedMoneybirdTimeEntries,
-  setCachedMoneybirdTimeEntries,
   getCachedMoneybirdUsers,
   setCachedMoneybirdUsers,
   getRecentMoneybirdEntries,
-  setRecentMoneybirdEntries,
 } from '../../lib/db.js';
 
 function firstNameOf(name) {
@@ -36,15 +33,6 @@ async function getMbUsersCached() {
   }
   await setCachedMoneybirdUsers(plain);
   return plain;
-}
-
-function filterEntries(entries, sinceIso, userId) {
-  return entries.filter((e) => {
-    if (!e.started_at) return false;
-    if (String(e.started_at).slice(0, 10) < sinceIso) return false;
-    if (userId && String(e.user_moneybird_id || '') !== String(userId)) return false;
-    return true;
-  });
 }
 
 export default async function handler(req, res) {
@@ -121,71 +109,68 @@ export default async function handler(req, res) {
         since = d.toISOString().slice(0, 10);
       }
       const userId = req.query.user_id ? String(req.query.user_id) : null;
-      const noCache = req.query.nocache === '1';
 
-      if (!noCache) {
-        // 1) Pre-warmed bulk (gevuld door cron) — dekt alle since-waarden die ≥ recent.since zijn.
-        const recent = await getRecentMoneybirdEntries();
-        if (recent && Array.isArray(recent.time_entries) && recent.since && recent.since <= since) {
-          const time_entries = filterEntries(recent.time_entries, since, userId);
-          res.setHeader('X-Cache', 'HIT');
-          res.setHeader('X-Source', 'redis-recent');
-          res.status(200).json({ time_entries, since, cached_at: recent.cached_at });
-          return;
-        }
-        // 2a) User-specifieke per-since cache (10 min TTL) — al gefilterd.
-        if (userId) {
-          const cachedUser = await getCachedMoneybirdTimeEntries(since, userId);
-          if (cachedUser && Array.isArray(cachedUser.time_entries)) {
-            res.setHeader('X-Cache', 'HIT');
-            res.setHeader('X-Source', 'redis-per-since-user');
-            res.status(200).json(cachedUser);
-            return;
-          }
-        }
-        // 2b) Bulk per-since cache — filter in-memory.
-        const cached = await getCachedMoneybirdTimeEntries(since, null);
-        if (cached && Array.isArray(cached.time_entries)) {
-          const time_entries = filterEntries(cached.time_entries, since, userId);
-          res.setHeader('X-Cache', 'HIT');
-          res.setHeader('X-Source', 'redis-per-since');
-          res.status(200).json({ time_entries, since, cached_at: cached.cached_at });
-          return;
-        }
+      function inWindow(e) {
+        if (!e.started_at) return false;
+        if (String(e.started_at).slice(0, 10) < since) return false;
+        if (userId && String(e.user_moneybird_id || '') !== userId) return false;
+        return true;
       }
 
-      // Live fetch: probeer eerst met user_id-filter (snel — alleen die ene medewerker).
-      // Als Moneybird 404 "user_id: not_found" teruggeeft (gebeurt voor users die wel in
-      // time entries voorkomen maar niet als AdministrationUser bestaan), vallen we terug
-      // op een bulk-fetch zonder filter en filteren we daarna in-memory.
+      // ─── Pass 1: incrementele bulk-cache (gevuld door cron, 7d per run) ──
+      // Wordt elke nacht aangevuld; na ~5 nachten 35 dagen historie compleet.
+      // ALTIJD instant. Toont entries op zowel gekoppelde als ongekoppelde
+      // Moneybird-projecten — exact wat de medewerker-pagina nodig heeft.
+      const recent = await getRecentMoneybirdEntries();
+      if (recent && Array.isArray(recent.time_entries) && recent.time_entries.length > 0) {
+        const time_entries = recent.time_entries.filter(inWindow);
+        const coverageSince = recent.since || null;
+        const partial = coverageSince && coverageSince > since;
+        res.setHeader('X-Source', partial ? 'cache-partial' : 'cache');
+        res.status(200).json({
+          time_entries, since,
+          source: partial ? 'cache-partial' : 'cache',
+          coverage_since: coverageSince,
+          cached_at: recent.cached_at || null,
+        });
+        return;
+      }
+
+      // ─── Pass 2: Moneybird live met user_id-filter (alleen als cache leeg) ─
       if (userId) {
         try {
           const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since},user_id:${userId}`);
-          const time_entries = raw.map(normalizeTimeEntry);
-          const filtered = filterEntries(time_entries, since, userId);
-          const payload = { time_entries: filtered, since, cached_at: new Date().toISOString() };
-          await setCachedMoneybirdTimeEntries(since, userId, payload);
-          res.setHeader('X-Cache', 'MISS');
+          const time_entries = raw.map(normalizeTimeEntry).filter(inWindow);
           res.setHeader('X-Source', 'moneybird-live-user');
-          res.status(200).json(payload);
+          res.status(200).json({ time_entries, since, source: 'moneybird-live-user' });
           return;
         } catch (err) {
           if (!/Moneybird 404/.test(err.message)) throw err;
-          // 404 → user_id wordt niet door de filter herkend; fall back op bulk.
         }
       }
 
-      // Bulk-fetch (zonder user_id-filter) — vult ook de pre-warm cache voor toekomstige requests.
-      const raw = await fetchAllTimeEntriesWithFilter(`started_after:${since}`);
-      const all_entries = raw.map(normalizeTimeEntry);
-      const fullPayload = { time_entries: all_entries, since, cached_at: new Date().toISOString() };
-      await setCachedMoneybirdTimeEntries(since, null, fullPayload);
-      try { await setRecentMoneybirdEntries(fullPayload); } catch {}
-
-      const time_entries = filterEntries(all_entries, since, userId);
-      res.setHeader('X-Cache', 'MISS');
-      res.setHeader('X-Source', userId ? 'moneybird-live-bulk-fallback' : 'moneybird-live-bulk');
-      res.status(200).json({ time_entries, since, cached_at: fullPayload.cached_at });
+      // ─── Pass 3: lokale per-project cache (alleen tracked) ───────────────
+      // Allerlaatste vangnet, voor het zeldzame geval dat de bulk-cache nog
+      // helemaal leeg is én de user_id-filter 404 gaf.
+      const projects = await listProjects();
+      const projectIds = projects.map((p) => p.id);
+      const entriesByProject = await listTimeEntriesBatch(projectIds);
+      const projectById = new Map(projects.map((p) => [p.id, p]));
+      const time_entries = [];
+      for (const [pid, entries] of entriesByProject) {
+        const p = projectById.get(pid);
+        if (!p) continue;
+        for (const e of entries) {
+          if (!inWindow(e)) continue;
+          time_entries.push({
+            ...e,
+            moneybird_project_id: e.moneybird_project_id || p.moneybird_project_id || null,
+            moneybird_project_name: e.moneybird_project_name || p.name || null,
+          });
+        }
+      }
+      res.setHeader('X-Source', 'local-tracked-only');
+      res.status(200).json({ time_entries, since, source: 'local-tracked-only' });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
