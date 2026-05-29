@@ -15,7 +15,7 @@ import {
   setCachedMoneybirdUsers,
   getRecentMoneybirdEntries,
 } from '../../lib/db.js';
-import { warmMoneybirdWeek } from '../../lib/sync.js';
+import { warmMoneybirdDay } from '../../lib/sync.js';
 
 function firstNameOf(name) {
   const t = String(name || '').trim();
@@ -103,10 +103,10 @@ export default async function handler(req, res) {
 
   if (resource === 'time_entries') {
     try {
-      // Handmatige cache-opbouw: één week per call (klein, time-out-veilig).
+      // Handmatige cache-opbouw: één dag per call (klein, time-out-veilig).
       if (req.query.warm) {
-        const result = await warmMoneybirdWeek(String(req.query.warm));
-        res.setHeader('X-Source', 'warm-week');
+        const result = await warmMoneybirdDay(String(req.query.warm));
+        res.setHeader('X-Source', 'warm-day');
         res.status(200).json({ warmed: true, ...result });
         return;
       }

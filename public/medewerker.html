@@ -116,21 +116,28 @@
     document.getElementById('warmWrap').style.display = '';
   }
 
-  // Bouw de bulk-cache op in 4 kleine stappen (1 week per call) en herlaad daarna.
+  // Bouw de bulk-cache op in kleine stappen: één dag per call (time-out-veilig) en herlaad daarna.
   document.getElementById('warmBtn').onclick = async () => {
     const btn = document.getElementById('warmBtn');
     btn.disabled = true;
-    const weeks = weekStarts.slice(); // de 4 maandagen van de getoonde periode
+    // Alle dagen van de getoonde periode (startMonday t/m vandaag).
+    const days = [];
+    const d0 = new Date(startMonday);
+    for (let i = 0; i < 28; i++) {
+      const d = new Date(d0); d.setDate(d0.getDate() + i);
+      if (d > today) break;
+      days.push(dateToIso(d));
+    }
     let done = 0;
-    for (const w of weeks) {
-      btn.textContent = `⏳ Ophalen week ${done + 1}/${weeks.length}…`;
+    for (const day of days) {
+      btn.textContent = `⏳ Ophalen dag ${done + 1}/${days.length}…`;
       try {
-        await apiGet(`/api/moneybird/time_entries?warm=${encodeURIComponent(w)}`);
+        await apiGet(`/api/moneybird/time_entries?warm=${encodeURIComponent(day)}`);
         done++;
       } catch (err) {
         btn.disabled = false;
         btn.textContent = '⤓ Opnieuw proberen';
-        banner.innerHTML = `<span style="color:#b91c1c">Ophalen mislukt bij week ${fmtDateShort(w)}: ${escapeHtml(err.message || String(err))}</span>`;
+        banner.innerHTML = `<span style="color:#b91c1c">Ophalen mislukt bij ${fmtDateShort(day)}: ${escapeHtml(err.message || String(err))}</span>`;
         return;
       }
     }
