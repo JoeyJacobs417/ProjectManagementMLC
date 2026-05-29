@@ -18,6 +18,9 @@
   </div>
   <p class="subtle">Alle uren geschreven in Moneybird in de afgelopen 4 weken (inclusief de huidige week), gegroepeerd per Moneybird-project. Inclusief uren op projecten die niet in deze app gekoppeld zijn.</p>
   <p class="subtle" id="sourceBanner" style="margin-top:.25rem; font-size:.8rem"></p>
+  <div id="warmWrap" style="margin:.25rem 0 0; display:none">
+    <button class="btn btn-ghost" id="warmBtn">⤓ Haal volledige Moneybird-uren op (incl. ongekoppelde projecten)</button>
+  </div>
 
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
@@ -106,8 +109,34 @@
   } else if (src === 'moneybird-live-user') {
     banner.innerHTML = `<span style="color:#047857">✓ Compleet (live opgehaald)</span>`;
   } else if (src === 'local-tracked-only') {
-    banner.innerHTML = `<span style="color:#b45309">⚠ Bulk-cache leeg en de Moneybird user-filter werkt niet voor deze medewerker. Alleen uren op gekoppelde projecten zichtbaar.</span>`;
+    banner.innerHTML = `<span style="color:#b45309">⚠ Alleen uren op gekoppelde projecten zichtbaar — de volledige Moneybird-cache is nog niet opgebouwd. Klik op de knop hieronder om alle uren (ook op ongekoppelde projecten) op te halen.</span>`;
   }
+  // Toon de opbouw-knop als de data onvolledig is.
+  if (src === 'local-tracked-only' || src === 'cache-partial') {
+    document.getElementById('warmWrap').style.display = '';
+  }
+
+  // Bouw de bulk-cache op in 4 kleine stappen (1 week per call) en herlaad daarna.
+  document.getElementById('warmBtn').onclick = async () => {
+    const btn = document.getElementById('warmBtn');
+    btn.disabled = true;
+    const weeks = weekStarts.slice(); // de 4 maandagen van de getoonde periode
+    let done = 0;
+    for (const w of weeks) {
+      btn.textContent = `⏳ Ophalen week ${done + 1}/${weeks.length}…`;
+      try {
+        await apiGet(`/api/moneybird/time_entries?warm=${encodeURIComponent(w)}`);
+        done++;
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = '⤓ Opnieuw proberen';
+        banner.innerHTML = `<span style="color:#b91c1c">Ophalen mislukt bij week ${fmtDateShort(w)}: ${escapeHtml(err.message || String(err))}</span>`;
+        return;
+      }
+    }
+    btn.textContent = '✓ Klaar — pagina wordt herladen…';
+    setTimeout(() => location.reload(), 600);
+  };
 
   // Naam fallback: uit URL → uit eerste entry → 'Onbekend'
   let empName = empNameFromUrl || '';
