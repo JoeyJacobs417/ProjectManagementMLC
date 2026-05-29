@@ -397,24 +397,33 @@
   renderForecast();
 
   // ── Komende deadlines (onderaan) ───────────────────────────────
+  // Eén rij per deadline (een project kan er meerdere hebben).
   const deadlinesEl = document.getElementById('deadlines');
-  const withDeadline = baseProjects
-    .filter((p) => p.deadline && p.status !== 'done')
-    .map((p) => ({ p, days: daysFromNow(p.deadline) }))
-    .filter((x) => x.days !== null)
-    .sort((a, b) => a.days - b.days)
-    .slice(0, 10);
-  if (withDeadline.length === 0) {
+  const deadlineRows = [];
+  for (const p of baseProjects) {
+    if (p.status === 'done') continue;
+    const list = (p.deadlines && p.deadlines.length) ? p.deadlines : (p.deadline ? [{ date: p.deadline, description: '' }] : []);
+    for (const d of list) {
+      const days = daysFromNow(d.date);
+      if (days === null) continue;
+      deadlineRows.push({ p, date: d.date, description: d.description || '', days });
+    }
+  }
+  deadlineRows.sort((a, b) => a.days - b.days);
+  const shownDeadlines = deadlineRows.slice(0, 15);
+  if (shownDeadlines.length === 0) {
     deadlinesEl.innerHTML = '<p class="subtle">Geen openstaande deadlines.</p>';
   } else {
     deadlinesEl.innerHTML = `
       <table class="table" style="margin:0">
-        <thead><tr><th>Project</th><th>Deadline</th><th>Status</th><th>Uren</th></tr></thead>
+        <thead><tr><th>Project</th><th>Deadline</th><th>Omschrijving</th><th>Projectmanager</th><th>Status</th><th>Uren</th></tr></thead>
         <tbody>
-          ${withDeadline.map(({ p }) => `
+          ${shownDeadlines.map(({ p, date, description }) => `
             <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
               <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-              <td>${deadlineBadge(p.deadline)}</td>
+              <td>${deadlineBadge(date)}</td>
+              <td>${description ? escapeHtml(description) : '<span class="subtle">—</span>'}</td>
+              <td>${escapeHtml(p.manager_name || '—')}</td>
               <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
               <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
             </tr>`).join('')}

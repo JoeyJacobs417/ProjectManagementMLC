@@ -75,6 +75,31 @@ function normalizeWeeklyAllocations(input) {
   return out;
 }
 
+function normalizeDeadlines(input, legacyDeadline) {
+  let arr = [];
+  if (Array.isArray(input)) arr = input;
+  else if (legacyDeadline && isIsoDate(legacyDeadline)) arr = [{ date: legacyDeadline, description: '' }];
+  const out = [];
+  const seen = new Set();
+  for (const d of arr) {
+    if (!d) continue;
+    const date = String(d.date || '').trim();
+    if (!isIsoDate(date)) continue;
+    const description = String(d.description || '').trim();
+    const key = `${date}|${description}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ date, description });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+
+function earliestDeadline(deadlines) {
+  if (!Array.isArray(deadlines) || deadlines.length === 0) return '';
+  return deadlines.reduce((acc, d) => (acc === '' || d.date < acc ? d.date : acc), '');
+}
+
 function normalizeStatus(s) { return VALID_STATUSES.includes(String(s || '').toLowerCase()) ? String(s).toLowerCase() : 'in_progress'; }
 
 function normalizeModules(input) {
@@ -117,7 +142,8 @@ function enrichWithStats(project, entries) {
     status: project.status || 'in_progress',
     modules: mods,
     module: mods[0] || '',
-    deadline: project.deadline || '',
+    deadlines: normalizeDeadlines(project.deadlines, project.deadline),
+    deadline: earliestDeadline(normalizeDeadlines(project.deadlines, project.deadline)),
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
     is_hourly_billing: !!project.is_hourly_billing,
@@ -291,7 +317,8 @@ export default async function handler(req, res) {
       contacts: normalizeContacts(b.contacts),
       status: normalizeStatus(b.status),
       modules,
-      deadline: normalizeDate(b.deadline),
+      deadlines: normalizeDeadlines(b.deadlines, b.deadline),
+      deadline: earliestDeadline(normalizeDeadlines(b.deadlines, b.deadline)),
       start_date: normalizeDate(b.start_date),
       is_poc: !!b.is_poc,
       is_hourly_billing: !!b.is_hourly_billing,

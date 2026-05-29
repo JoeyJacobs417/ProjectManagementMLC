@@ -64,6 +64,16 @@
         <td><button class="btn btn-ghost" type="button" data-remove>Verwijder</button></td>
       </tr>`).join('');
 
+    const deadlineList = (project.deadlines && project.deadlines.length)
+      ? project.deadlines
+      : (project.deadline ? [{ date: project.deadline, description: '' }] : []);
+    const deadlineRows = (deadlineList.length ? deadlineList : [{ date: '', description: '' }]).map((d) => `
+      <tr>
+        <td><input type="date" data-deadline="date" value="${escapeHtml(d.date || '')}"></td>
+        <td><input type="text" data-deadline="description" value="${escapeHtml(d.description || '')}" placeholder="bv. oplevering fase 1"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove-deadline>Verwijder</button></td>
+      </tr>`).join('');
+
     const projectModules = project.modules || [];
 
     const notesHtml = (project.notes && project.notes.length > 0)
@@ -87,7 +97,8 @@
             ${projectModules.map((m) => `<span class="badge badge-blue">${escapeHtml(m)}</span>`).join('')}
             ${project.is_poc ? `<span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>` : ''}
             ${project.is_hourly_billing ? `<span class="badge" style="background:rgba(16,185,129,.15);color:#047857" title="Uurtje-factuurtje: geen urenlimiet">Uurtje-factuurtje</span>` : ''}
-            ${project.deadline ? deadlineBadge(project.deadline) : ''}
+            ${(project.deadlines && project.deadlines.length ? project.deadlines : (project.deadline ? [{ date: project.deadline, description: '' }] : []))
+              .map((d) => deadlineBadge(d.date) + (d.description ? ` <span class="subtle" style="font-size:.8rem">${escapeHtml(d.description)}</span>` : '')).join(' ')}
           </div>
           <p class="subtle">
             PM: ${escapeHtml(project.manager_name || '—')}
@@ -118,7 +129,8 @@
           <p><strong>Beschikbaar:</strong> ${(project.available_hours || 0).toFixed(1)} uur</p>
           <p><strong>Uurtarief:</strong> € ${(project.hourly_rate || 0).toFixed(2)}</p>
           ${project.start_date ? `<p><strong>Startdatum:</strong> ${fmtDate(project.start_date)}</p>` : ''}
-          ${project.deadline ? `<p><strong>Deadline:</strong> ${fmtDate(project.deadline)}</p>` : ''}
+          ${(project.deadlines && project.deadlines.length ? project.deadlines : (project.deadline ? [{ date: project.deadline, description: '' }] : []))
+            .map((d) => `<p><strong>Deadline:</strong> ${fmtDate(d.date)}${d.description ? ` — ${escapeHtml(d.description)}` : ''}</p>`).join('')}
           <div class="progress big">
             <div class="progress-bar ${progressBarClass(project.percentage_used)}" style="width:${Math.min(project.percentage_used, 100)}%"></div>
           </div>
@@ -158,10 +170,17 @@
 
           <div class="form-row">
             <label><span class="lbl">Startdatum</span><input type="date" name="start_date" value="${escapeHtml(project.start_date || '')}"></label>
-            <label><span class="lbl">Deadline</span><input type="date" name="deadline" value="${escapeHtml(project.deadline || '')}"></label>
             ${canEditManager ? `
               <label><span class="lbl">Projectmanager</span><select name="manager_id">${managerOptions}</select></label>` : '<label></label>'}
+            <label></label>
           </div>
+
+          <h4>Deadlines</h4>
+          <table class="table">
+            <thead><tr><th style="width:180px">Datum</th><th>Omschrijving</th><th></th></tr></thead>
+            <tbody id="deadlinesBody">${deadlineRows}</tbody>
+          </table>
+          <button type="button" class="btn btn-ghost" id="addDeadline">+ Deadline toevoegen</button>
 
           <label>Uitzonderingen / afspraken<textarea name="exceptions" rows="3">${escapeHtml(project.exceptions || '')}</textarea></label>
 
@@ -370,6 +389,26 @@
       bindContactRow(tr);
     };
 
+    function bindDeadlineRow(tr) {
+      const btn = tr.querySelector('[data-remove-deadline]');
+      if (btn) btn.onclick = () => {
+        const tbody = document.getElementById('deadlinesBody');
+        if (tbody.children.length > 1) tr.remove();
+        else tr.querySelectorAll('input').forEach((i) => { i.value = ''; });
+      };
+    }
+    document.querySelectorAll('#deadlinesBody tr').forEach(bindDeadlineRow);
+    document.getElementById('addDeadline').onclick = () => {
+      const tbody = document.getElementById('deadlinesBody');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="date" data-deadline="date"></td>
+        <td><input type="text" data-deadline="description" placeholder="bv. oplevering fase 1"></td>
+        <td><button class="btn btn-ghost" type="button" data-remove-deadline>Verwijder</button></td>`;
+      tbody.appendChild(tr);
+      bindDeadlineRow(tr);
+    };
+
     document.getElementById('editForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -394,6 +433,13 @@
       const modules = Array.from(document.querySelectorAll('#modulesGrid input[type=checkbox]:checked'))
         .map((cb) => cb.value);
       if (modules.length === 0) { toast('Selecteer minstens 1 module', 'error'); return; }
+      const deadlines = [];
+      for (const tr of document.querySelectorAll('#deadlinesBody tr')) {
+        const date = tr.querySelector('[data-deadline=date]').value.trim();
+        const description = tr.querySelector('[data-deadline=description]').value.trim();
+        if (!date) continue;
+        deadlines.push({ date, description });
+      }
       const body = {
         description: f.get('description'),
         available_hours: Number(f.get('available_hours')) || 0,
@@ -402,7 +448,7 @@
         feature_requests: f.get('feature_requests'),
         status: f.get('status'),
         modules,
-        deadline: f.get('deadline') || '',
+        deadlines,
         start_date: f.get('start_date') || '',
         is_poc: f.get('is_poc') === 'on',
         is_hourly_billing: f.get('is_hourly_billing') === 'on',

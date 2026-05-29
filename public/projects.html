@@ -28,22 +28,16 @@
         🔍
         <input type="search" id="searchInput" placeholder="Zoek op project, contact, manager, module, team…" style="flex:1">
       </label>
-      <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
-        Status:
-        <select id="statusFilter" style="width:auto">
-          <option value="all">Alle statussen</option>
-          <option value="in_progress">In progress</option>
-          <option value="on_hold">On hold</option>
-          <option value="done">Done</option>
-          <option value="future">Future</option>
-          <option value="recurring">Recurring</option>
-        </select>
-      </label>
+      <div style="display:flex; flex-direction:row; align-items:center; gap:.5rem; flex-wrap:wrap; margin:0; font-weight:500">
+        <span>Status:</span>
+        <label style="display:inline-flex; align-items:center; gap:.3rem; font-weight:400"><input type="checkbox" data-status="in_progress" style="width:auto"> In progress</label>
+        <label style="display:inline-flex; align-items:center; gap:.3rem; font-weight:400"><input type="checkbox" data-status="on_hold" style="width:auto"> On hold</label>
+        <label style="display:inline-flex; align-items:center; gap:.3rem; font-weight:400"><input type="checkbox" data-status="done" style="width:auto"> Done</label>
+        <label style="display:inline-flex; align-items:center; gap:.3rem; font-weight:400"><input type="checkbox" data-status="future" style="width:auto"> Future</label>
+        <label style="display:inline-flex; align-items:center; gap:.3rem; font-weight:400"><input type="checkbox" data-status="recurring" style="width:auto"> Recurring</label>
+      </div>
       <label style="display:flex; flex-direction:row; align-items:center; gap:.4rem; margin:0; font-weight:500">
         <input type="checkbox" id="filterPoc" style="width:auto"> Alleen POC
-      </label>
-      <label style="display:flex; flex-direction:row; align-items:center; gap:.4rem; margin:0; font-weight:500">
-        <input type="checkbox" id="filterRecurring" style="width:auto"> Alleen Recurring
       </label>
       <span class="subtle" id="filterCount"></span>
     </div>
@@ -91,7 +85,13 @@
     toast('Alle projecten worden gesynchroniseerd, dit kan even duren…', 'info');
     try {
       const r = await apiSend('/api/projects/sync-all', 'POST');
-      toast(`${r.totalEntries} entries opgehaald uit ${r.succeeded} projecten${r.failed ? ` (${r.failed} fouten)` : ''}.`, 'success');
+      let msg = `${r.totalEntries} entries opgehaald uit ${r.succeeded} projecten${r.failed ? ` (${r.failed} fouten)` : ''}.`;
+      if (r.recentMb && r.recentMb.count >= 0) {
+        msg += ` Bulk-cache: ${r.recentMb.count} entries vanaf ${r.recentMb.since} (+${r.recentMb.fresh} nieuw).`;
+      } else if (r.recentMbError) {
+        msg += ` ⚠ Bulk-cache refresh faalde: ${r.recentMbError}`;
+      }
+      toast(msg, r.recentMbError ? 'error' : 'success');
       await loadAll();
     } catch (err) {
       toast(err.message, 'error');
@@ -104,15 +104,13 @@
   const STORAGE_QUERY = 'pm_projects_query';
   const STORAGE_SORT_DIR = 'pm_projects_pct_sort_dir';
   const STORAGE_POC = 'pm_projects_filter_poc';
-  const STORAGE_RECURRING = 'pm_projects_filter_recurring';
-  const status = document.getElementById('statusFilter');
+  const statusCheckboxes = Array.from(document.querySelectorAll('input[data-status]'));
   const search = document.getElementById('searchInput');
   const filterPoc = document.getElementById('filterPoc');
-  const filterRecurring = document.getElementById('filterRecurring');
-  status.value = sessionStorage.getItem(STORAGE_STATUS) || 'all';
+  const savedStatuses = (sessionStorage.getItem(STORAGE_STATUS) || '').split(',').filter(Boolean);
+  for (const cb of statusCheckboxes) cb.checked = savedStatuses.includes(cb.dataset.status);
   search.value = sessionStorage.getItem(STORAGE_QUERY) || '';
   filterPoc.checked = sessionStorage.getItem(STORAGE_POC) === '1';
-  filterRecurring.checked = sessionStorage.getItem(STORAGE_RECURRING) === '1';
   // 0 = niet sorteren, 1 = oplopend, -1 = aflopend
   let pctSortDir = Number(sessionStorage.getItem(STORAGE_SORT_DIR)) || 0;
 
@@ -150,19 +148,17 @@
   }
 
   function render() {
-    const statusVal = status.value;
+    const selectedStatuses = statusCheckboxes.filter((cb) => cb.checked).map((cb) => cb.dataset.status);
     const q = search.value.trim().toLowerCase();
     const onlyPoc = filterPoc.checked;
-    const onlyRecurring = filterRecurring.checked;
-    sessionStorage.setItem(STORAGE_STATUS, statusVal);
+    sessionStorage.setItem(STORAGE_STATUS, selectedStatuses.join(','));
     sessionStorage.setItem(STORAGE_QUERY, q);
     sessionStorage.setItem(STORAGE_POC, onlyPoc ? '1' : '0');
-    sessionStorage.setItem(STORAGE_RECURRING, onlyRecurring ? '1' : '0');
 
     const filtered = projects.filter((p) => {
-      if (statusVal !== 'all' && (p.status || 'in_progress') !== statusVal) return false;
+      // Geen status aangevinkt = alle statussen tonen.
+      if (selectedStatuses.length > 0 && !selectedStatuses.includes(p.status || 'in_progress')) return false;
       if (onlyPoc && !p.is_poc) return false;
-      if (onlyRecurring && p.status !== 'recurring') return false;
       if (!matchSearch(p, q)) return false;
       return true;
     });
@@ -231,10 +227,9 @@
     }
   }
 
-  status.addEventListener('change', render);
+  statusCheckboxes.forEach((cb) => cb.addEventListener('change', render));
   search.addEventListener('input', render);
   filterPoc.addEventListener('change', render);
-  filterRecurring.addEventListener('change', render);
   await loadAll();
 </script>
 </body></html>

@@ -27,6 +27,33 @@ const EDITABLE_FIELDS = [
 
 function isIsoDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
 
+// Meerdere deadlines per project: [{ date, description }]. Met legacy-fallback naar
+// het oude enkele `deadline`-veld. Gesorteerd op datum (oplopend).
+function normalizeDeadlines(input, legacyDeadline) {
+  let arr = [];
+  if (Array.isArray(input)) arr = input;
+  else if (legacyDeadline && isIsoDate(legacyDeadline)) arr = [{ date: legacyDeadline, description: '' }];
+  const out = [];
+  const seen = new Set();
+  for (const d of arr) {
+    if (!d) continue;
+    const date = String(d.date || '').trim();
+    if (!isIsoDate(date)) continue;
+    const description = String(d.description || '').trim();
+    const key = `${date}|${description}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ date, description });
+  }
+  out.sort((a, b) => a.date.localeCompare(b.date));
+  return out;
+}
+
+function earliestDeadline(deadlines) {
+  if (!Array.isArray(deadlines) || deadlines.length === 0) return '';
+  return deadlines.reduce((acc, d) => (acc === '' || d.date < acc ? d.date : acc), '');
+}
+
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
   const seen = new Set();
@@ -132,7 +159,8 @@ async function buildDetail(project) {
     status: project.status || 'in_progress',
     modules: mods,
     module: mods[0] || '',
-    deadline: project.deadline || '',
+    deadlines: normalizeDeadlines(project.deadlines, project.deadline),
+    deadline: earliestDeadline(normalizeDeadlines(project.deadlines, project.deadline)),
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
     is_hourly_billing: !!project.is_hourly_billing,
@@ -259,7 +287,11 @@ export default async function handler(req, res) {
       project.modules = mods;
       delete project.module; // legacy weghalen
     }
-    if (b.deadline !== undefined) project.deadline = isIsoDate(b.deadline) ? String(b.deadline) : '';
+    if (b.deadlines !== undefined || b.deadline !== undefined) {
+      const list = normalizeDeadlines(b.deadlines, b.deadline);
+      project.deadlines = list;
+      project.deadline = earliestDeadline(list); // legacy-veld bijhouden voor backward compat
+    }
     if (b.start_date !== undefined) project.start_date = isIsoDate(b.start_date) ? String(b.start_date) : '';
     if (b.is_poc !== undefined) project.is_poc = !!b.is_poc;
     if (b.is_hourly_billing !== undefined) project.is_hourly_billing = !!b.is_hourly_billing;
