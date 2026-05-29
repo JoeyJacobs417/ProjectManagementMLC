@@ -25,7 +25,7 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, renderTopbar, escapeHtml } from '/app.js';
+  import { apiGet, renderTopbar, escapeHtml, isDutchHoliday } from '/app.js';
   await renderTopbar('/medewerkers.html');
 
   const params = new URLSearchParams(location.search);
@@ -72,16 +72,22 @@
   let trackedProjects = [];
   let mbResp = null;
   let mbError = null;
+  let settings = { employee_capacities: {}, employee_vacations: {} };
   try {
-    const [pRes, mRes] = await Promise.all([
+    const [pRes, mRes, sRes] = await Promise.all([
       apiGet('/api/projects').catch(() => ({ projects: [] })),
       apiGet(mbUrl),
+      apiGet('/api/admin/settings').catch(() => ({ settings: {} })),
     ]);
     trackedProjects = pRes.projects || [];
     mbResp = mRes;
+    settings = sRes.settings || settings;
   } catch (err) {
     mbError = err.message || String(err);
   }
+
+  const empCapacity = Number((settings.employee_capacities || {})[empId]) || 0;
+  const empVacations = (settings.employee_vacations || {})[empId] || [];
 
   if (mbError) {
     document.getElementById('content').innerHTML =
@@ -178,10 +184,38 @@
   document.getElementById('empMeta').textContent =
     `${grandTotal.toFixed(1)} uur totaal · ${grouped.length} ${grouped.length === 1 ? 'project' : 'projecten'} · periode ${fmtDateShort(sinceIso)} – ${fmtDateShort(dateToIso(today))}`;
 
+  // Vakantie + nationale feestdagen per week (zelfde logica als de planning-pagina).
+  // Werkdagen (ma–vr) die een NL-feestdag zijn óf binnen een vakantieperiode vallen,
+  // × uren-per-dag (capaciteit ÷ 5, of 8 als geen capaciteit ingesteld).
+  const vacHoursPerDay = empCapacity > 0 ? empCapacity / 5 : 8;
+  function vacInfoForWeek(weekStartIso) {
+    const [y, m, d] = weekStartIso.split('-').map(Number);
+    const wStart = new Date(y, m - 1, d);
+    const items = [];
+    for (let i = 0; i < 5; i++) {
+      const dd = new Date(wStart); dd.setDate(wStart.getDate() + i);
+      const iso = dateToIso(dd);
+      const isHoliday = isDutchHoliday(iso);
+      const isVac = (empVacations || []).some((p) => p.start <= iso && iso <= p.end);
+      if (isHoliday) items.push({ iso, kind: 'feestdag' });
+      else if (isVac) items.push({ iso, kind: 'vakantie' });
+    }
+    return items;
+  }
+  const vacPerWeek = new Map(weekStarts.map((w) => [w, vacInfoForWeek(w)]));
+  const vacTotal = Array.from(vacPerWeek.values()).reduce((a, items) => a + items.length * vacHoursPerDay, 0);
+
   const c = document.getElementById('content');
-  if (grouped.length === 0) {
-    c.innerHTML = `<p class="subtle">Geen uren gevonden in deze periode.</p>`;
+  if (grouped.length === 0 && vacTotal === 0) {
+    c.innerHTML = `<p class="subtle">Geen uren, vakantie of feestdagen gevonden in deze periode.</p>`;
   } else {
+    const vacCells = weekStarts.map((w) => {
+      const items = vacPerWeek.get(w);
+      if (items.length === 0) return '<td><span class="subtle">—</span></td>';
+      const hrs = items.length * vacHoursPerDay;
+      const tip = items.map((it) => `${fmtDateShort(it.iso)} (${it.kind})`).join(', ');
+      return `<td title="${tip}"><span class="badge badge-orange">${hrs.toFixed(1)} u</span></td>`;
+    }).join('');
     c.innerHTML = `
       <table class="table">
         <thead><tr>
@@ -211,8 +245,13 @@
                 <td><strong>${g.total.toFixed(1)} u</strong></td>
               </tr>`;
           }).join('')}
+          <tr style="background:rgba(245,158,11,.06)">
+            <td colspan="2"><strong>Vakantie / feestdagen</strong> <span class="subtle" style="font-size:.8rem">(automatisch)</span></td>
+            ${vacCells}
+            <td><strong>${vacTotal > 0 ? vacTotal.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</strong></td>
+          </tr>
           <tr style="background:var(--bg-soft)">
-            <td colspan="2"><strong>Totaal</strong></td>
+            <td colspan="2"><strong>Totaal gewerkt</strong></td>
             ${weekStarts.map((w) => {
               const weekTotal = grouped.reduce((a, g) => a + (g.perWeek.get(w) || 0), 0);
               return `<td><strong>${weekTotal.toFixed(1)} u</strong></td>`;
