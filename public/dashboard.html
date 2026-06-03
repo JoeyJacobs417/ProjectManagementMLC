@@ -341,14 +341,15 @@
     let targetHtml = '';
     if (isMonth && target > 0) {
       const diff = grandTotal - target;
-      const pct = target > 0 ? Math.round((grandTotal / target) * 100) : 0;
+      const pct = target > 0 ? Math.round(((grandTotal - target) / target) * 100) : 0;
       const onTarget = grandTotal >= target;
       const color = onTarget ? '#10b981' : '#ef4444';
       const icon = onTarget ? '✓' : '⚠';
+      const pctLabel = onTarget ? `+${pct}%` : `${pct}%`;
       const label = onTarget
         ? `target ${fmtEuro(target)} gehaald (+${fmtEuro(Math.max(0, diff))})`
         : `tekort ${fmtEuro(Math.abs(diff))} op target ${fmtEuro(target)}`;
-      targetHtml = `<span style="color:${color}; font-weight:600">${icon} ${pct}% — ${label}</span>`;
+      targetHtml = `<span style="color:${color}; font-weight:600">${icon} ${pctLabel} — ${label}</span>`;
     }
     document.getElementById('forecastTotal').innerHTML =
       `<span>Totaal voorspelde omzet ${periodDesc}: <strong style="color:var(--text)">${fmtEuro(grandTotal)}</strong></span>${targetHtml}`;
