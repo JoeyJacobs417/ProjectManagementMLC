@@ -224,7 +224,6 @@
       const cap = Number(capacities[e.id]) || 0;
       const periods = vacationsByEmp[e.id] || [];
       const upcoming = periods.filter((p) => p.end >= today);
-      const onDashboard = dashboardEmps.has(e.id);
       const detailHref = `/medewerker.html?id=${encodeURIComponent(e.id)}&name=${encodeURIComponent(e.name)}`;
 
       let estimateHtml = '<span class="subtle">capaciteit niet ingesteld</span>';
@@ -243,14 +242,6 @@
       } else if (e.totalRemaining === 0) {
         estimateHtml = '<span class="subtle">niets meer te doen</span>';
       }
-
-      const vacationListHtml = upcoming.length === 0
-        ? '<span class="subtle">geen geplande vakantie</span>'
-        : upcoming.map((p, i) => `
-            <span class="badge badge-orange" style="margin-right:.35rem; display:inline-block; margin-bottom:.25rem">
-              ${fmtDate(p.start)} t/m ${fmtDate(p.end)}${p.label ? ' — ' + escapeHtml(p.label) : ''}
-              ${isAdmin ? `<a href="#" data-remove-vac="${e.id}|${i}" style="margin-left:.5rem; color:inherit; text-decoration:none">×</a>` : ''}
-            </span>`).join('');
 
       // Komende 4 maandagen (vanaf deze week)
       const todayDate = new Date(); todayDate.setHours(0,0,0,0);
@@ -292,26 +283,6 @@
               <div>${estimateHtml}</div>
               ${e.newCount > 0 ? `<div><span class="badge status-future">${e.newCount} nieuwe ${e.newCount === 1 ? 'toewijzing' : 'toewijzingen'}</span></div>` : ''}
             </div>
-          </div>
-
-          ${isAdmin ? `
-            <div style="margin-bottom:.75rem">
-              <label style="display:inline-flex; align-items:center; gap:.5rem; margin:0; font-weight:500">
-                <input type="checkbox" data-dashboard-toggle="${e.id}" style="width:auto" ${onDashboard ? 'checked' : ''}>
-                Tonen op dashboard als deze medewerker binnen 7 dagen uit werk loopt
-              </label>
-            </div>` : ''}
-
-          <div style="margin-bottom:.75rem">
-            <div class="subtle" style="font-size:.75rem; text-transform:uppercase; letter-spacing:.04em; margin-bottom:.35rem">Vakantie</div>
-            <div>${vacationListHtml}</div>
-            ${isAdmin ? `
-              <div style="margin-top:.5rem; display:flex; flex-wrap:wrap; gap:.5rem; align-items:flex-end">
-                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Van</span><input type="date" data-vac-start="${e.id}" style="width:auto"></label>
-                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Tot</span><input type="date" data-vac-end="${e.id}" style="width:auto"></label>
-                <label style="margin:0; flex:1 1 200px"><span class="subtle" style="font-size:.75rem">Label (optioneel)</span><input type="text" data-vac-label="${e.id}" placeholder="bv. zomervakantie"></label>
-                <button class="btn btn-ghost" type="button" data-add-vac="${e.id}">+ Vakantie toevoegen</button>
-              </div>` : ''}
           </div>
 
           ${(() => {
@@ -452,6 +423,33 @@
             <thead><tr><th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th></tr></thead>
             <tbody>${weeklyRows}</tbody>
           </table>
+
+          <h4 style="margin-top:1.25rem">Geplande vakantie</h4>
+          ${(() => {
+            const vacRows = periods.map((p, i) => {
+              if (p.end < today) return '';
+              return `<tr>
+                <td>${fmtDate(p.start)}</td>
+                <td>${fmtDate(p.end)}</td>
+                <td>${p.label ? escapeHtml(p.label) : '<span class="subtle">—</span>'}</td>
+                ${isAdmin ? `<td style="text-align:right"><a href="#" data-remove-vac="${e.id}|${i}" style="color:#b91c1c; font-size:.85rem; text-decoration:none">Verwijderen</a></td>` : ''}
+              </tr>`;
+            }).filter(Boolean).join('');
+            const vacTable = vacRows
+              ? `<table class="table" style="margin:0 0 .75rem">
+                  <thead><tr><th>Van</th><th>Tot</th><th>Label</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+                  <tbody>${vacRows}</tbody>
+                </table>`
+              : `<p class="subtle" style="margin:0 0 .75rem">Geen geplande vakantie.</p>`;
+            const addForm = isAdmin ? `
+              <div style="display:flex; flex-wrap:wrap; gap:.5rem; align-items:flex-end">
+                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Van</span><input type="date" data-vac-start="${e.id}" style="width:auto"></label>
+                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Tot</span><input type="date" data-vac-end="${e.id}" style="width:auto"></label>
+                <label style="margin:0; flex:1 1 200px"><span class="subtle" style="font-size:.75rem">Label (optioneel)</span><input type="text" data-vac-label="${e.id}" placeholder="bv. zomervakantie"></label>
+                <button class="btn btn-ghost" type="button" data-add-vac="${e.id}">+ Vakantie toevoegen</button>
+              </div>` : '';
+            return vacTable + addForm;
+          })()}
         </div>`;
     }).join('');
 
@@ -484,9 +482,7 @@
         }
       };
     }
-    for (const cb of c.querySelectorAll('input[data-dashboard-toggle]')) {
-      cb.onchange = () => toggleDashboardEmp(cb.dataset.dashboardToggle, cb.checked);
-    }
+
     for (const btn of c.querySelectorAll('button[data-add-vac]')) {
       btn.onclick = async () => {
         const empId = btn.dataset.addVac;
