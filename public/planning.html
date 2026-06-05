@@ -3,6 +3,12 @@
 <meta charset="utf-8"><title>Planning — Projectmanager</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/style.css">
+<style>
+  /* Verberg spinner-pijltjes op number inputs */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+  input[type=number] { -moz-appearance:textfield; appearance:textfield; }
+</style>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head><body>
 <header class="topbar" id="topbar"></header>
@@ -402,9 +408,9 @@
                       const h = entry.hours > 0 ? entry.hours : '';
                       const note = entry.note || '';
                       const sep = i === 0 ? SEP + '; ' : '';
-                      return `<td style="${sep}padding:6px 3px; min-width:110px">
-                        <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:54px; margin-bottom:.2rem">
-                        <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:100%; font-size:.75rem; padding:.2rem .35rem">
+                      return `<td style="${sep}padding:6px 3px">
+                        <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:64px; display:block; margin-bottom:.2rem">
+                        <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:64px; display:block; font-size:.75rem; padding:.2rem .35rem">
                       </td>`;
                     }).join('')}
                   </tr>
