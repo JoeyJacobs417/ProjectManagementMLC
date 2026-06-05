@@ -116,6 +116,25 @@ function normalizeDashboardPlanningEmployees(input) {
   return out;
 }
 
+function normalizeOverig(input) {
+  if (!input || typeof input !== 'object') return {};
+  const out = {};
+  for (const [empId, weeks] of Object.entries(input)) {
+    const id = String(empId).trim();
+    if (!id || !weeks || typeof weeks !== 'object') continue;
+    const empOut = {};
+    for (const [week, val] of Object.entries(weeks)) {
+      if (!isIsoDate(week)) continue;
+      const hours = Number(val?.hours ?? val);
+      const note = String(val?.note || '').trim().slice(0, 500);
+      if (!Number.isFinite(hours) || hours < 0) continue;
+      empOut[week] = { hours: Math.round(hours * 10) / 10, note };
+    }
+    if (Object.keys(empOut).length) out[id] = empOut;
+  }
+  return out;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const user = await requireUser(req, res);
@@ -168,6 +187,7 @@ export default async function handler(req, res) {
     if (b.hidden_employees !== undefined) patch.hidden_employees = normalizeHiddenEmployees(b.hidden_employees);
     if (b.monthly_revenue_targets !== undefined) patch.monthly_revenue_targets = normalizeMonthlyRevenueTargets(b.monthly_revenue_targets);
     if (b.dashboard_planning_employees !== undefined) patch.dashboard_planning_employees = normalizeDashboardPlanningEmployees(b.dashboard_planning_employees);
+    if (b.employee_overig !== undefined) patch.employee_overig = normalizeOverig(b.employee_overig);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;

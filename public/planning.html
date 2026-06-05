@@ -99,7 +99,7 @@
     return `<span class="badge badge-blue" title="${list}">PowerSuite</span>`;
   }
 
-  let projects = [], capacities = {}, vacationsByEmp = {};
+  let projects = [], capacities = {}, vacationsByEmp = {}, overigByEmp = {};
   let dashboardEmps = new Set();
 
   async function loadAllData() {
@@ -113,6 +113,7 @@
     projects = projResp.projects;
     capacities = settingsResp.settings.employee_capacities || {};
     vacationsByEmp = settingsResp.settings.employee_vacations || {};
+    overigByEmp = settingsResp.settings.employee_overig || {};
     dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
 
     rebuildEmployees();
@@ -342,9 +343,11 @@
                 }
               }
             }
+            const overigData = overigByEmp[e.id] || {};
             const totalPerWeek = new Map(futureWeeks.map((w) => {
               const vacHrs = vacInfoPerWeek.get(w).length * hoursPerDay;
-              return [w, projectAllocSum.get(w) + vacHrs];
+              const overigHrs = Number((overigData[w] || {}).hours) || 0;
+              return [w, projectAllocSum.get(w) + vacHrs + overigHrs];
             }));
             const anyOver = cap > 0 && futureWeeks.some((w) => totalPerWeek.get(w) > cap + 0.01);
 
@@ -404,6 +407,21 @@
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     ${vacCells}
+                  </tr>
+                  <tr style="background:rgba(99,102,241,.06)">
+                    <td><strong>Overig</strong> <span class="subtle" style="font-size:.8rem">(losse taakjes)</span></td>
+                    <td><span class="subtle">—</span></td>
+                    <td><span class="subtle">—</span></td>
+                    <td><span class="subtle">—</span></td>
+                    ${futureWeeks.map((w) => {
+                      const entry = overigData[w] || {};
+                      const h = entry.hours > 0 ? entry.hours : '';
+                      const note = entry.note || '';
+                      return `<td style="min-width:120px">
+                        <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:64px; margin-bottom:.2rem">
+                        <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:100%; font-size:.75rem; padding:.2rem .35rem">
+                      </td>`;
+                    }).join('')}
                   </tr>
                   <tr style="background:var(--bg-soft)">
                     <td><strong>Totaal per week</strong></td>
@@ -473,6 +491,36 @@
         const cur = vacationsByEmp[empId] || [];
         await saveVacations(empId, cur.filter((_, i) => i !== Number(idx)));
       };
+    }
+
+    async function saveOverig(empId, week) {
+      const hoursInput = c.querySelector(`input[data-overig-hours="${empId}|${week}"]`);
+      const noteInput = c.querySelector(`input[data-overig-note="${empId}|${week}"]`);
+      const hours = hoursInput ? (hoursInput.value.trim() === '' ? 0 : Number(hoursInput.value)) : 0;
+      const note = noteInput ? noteInput.value.trim() : '';
+      if (!Number.isFinite(hours) || hours < 0) { toast('Ongeldig aantal uren', 'error'); return; }
+      const empData = { ...(overigByEmp[empId] || {}) };
+      if (hours > 0 || note) {
+        empData[week] = { hours, note };
+      } else {
+        delete empData[week];
+      }
+      const next = { ...overigByEmp, [empId]: empData };
+      if (!Object.keys(empData).length) delete next[empId];
+      try {
+        const r = await apiSend('/api/admin/settings', 'POST', { employee_overig: next });
+        Object.assign(overigByEmp, r.settings.employee_overig || {});
+        for (const k of Object.keys(overigByEmp)) { if (!(k in (r.settings.employee_overig || {}))) delete overigByEmp[k]; }
+        toast('Overig opgeslagen', 'success');
+        render();
+      } catch (err) { toast(`Opslaan mislukt: ${err.message}`, 'error'); }
+    }
+
+    for (const inp of c.querySelectorAll('input[data-overig-hours], input[data-overig-note]')) {
+      const isHours = inp.hasAttribute('data-overig-hours');
+      const raw = isHours ? inp.dataset.overigHours : inp.dataset.overigNote;
+      const [empId, week] = raw.split('|');
+      inp.onchange = () => saveOverig(empId, week);
     }
   }
 
