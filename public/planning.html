@@ -351,18 +351,26 @@
             }));
             const anyOver = cap > 0 && futureWeeks.some((w) => totalPerWeek.get(w) > cap + 0.01);
 
+            const SEP = 'border-left:2px solid #cbd5e1';
+            const thisMonIso = dateToIso(mondayOf(new Date()));
+
             const rowsHtml = rows.map((row) => {
               const p = row.project;
               const isOverbudget = row.remaining === 0 && !p.is_hourly_billing;
               const rowStyle = isOverbudget ? ' style="background:rgba(239,68,68,.10)"' : '';
-              const allocByWeek = new Map(
-                (p.weekly_allocations || [])
-                  .filter((a) => a.moneybird_user_id === e.id)
-                  .map((a) => [a.week_start, Number(a.hours) || 0])
-              );
-              const allocCells = futureWeeks.map((w) => {
+              const empAllocs = (p.weekly_allocations || []).filter((a) => a.moneybird_user_id === e.id);
+              const allocByWeek = new Map(empAllocs.map((a) => [a.week_start, Number(a.hours) || 0]));
+              // Ingepland = sum of all upcoming allocations for this employee (this week and beyond)
+              const ingepland = empAllocs
+                .filter((a) => a.week_start >= thisMonIso)
+                .reduce((s, a) => s + (Number(a.hours) || 0), 0);
+              const ingeplandOver = !p.is_hourly_billing && row.remaining > 0 && ingepland > row.remaining + 0.01;
+              const ingeplandCell = p.is_hourly_billing
+                ? `<td><span class="subtle">—</span></td>`
+                : `<td style="${ingeplandOver ? 'color:#b45309;font-weight:600' : ''}">${ingepland > 0 ? ingepland.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>`;
+              const allocCells = futureWeeks.map((w, i) => {
                 const h = allocByWeek.get(w) || 0;
-                return `<td><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
+                return `<td style="${i === 0 ? SEP : ''}; padding:6px 6px"><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:54px"></td>`;
               }).join('');
               return `
                 <tr${rowStyle}>
@@ -370,23 +378,26 @@
                   <td>${row.ownHours.toFixed(1)} u</td>
                   <td>${p.is_hourly_billing ? '<span class="subtle">∞</span>' : row.remaining.toFixed(1) + ' u'}</td>
                   <td>${p.is_hourly_billing ? '<span class="subtle">—</span>' : (Number(p.available_hours) || 0).toFixed(1) + ' u'}</td>
+                  ${ingeplandCell}
                   ${allocCells}
                 </tr>`;
             }).join('');
 
-            const vacCells = futureWeeks.map((w) => {
+            const vacCells = futureWeeks.map((w, i) => {
               const items = vacInfoPerWeek.get(w);
-              if (items.length === 0) return '<td><span class="subtle">—</span></td>';
+              const sep = i === 0 ? `style="${SEP}; padding:6px 6px"` : 'style="padding:6px 6px"';
+              if (items.length === 0) return `<td ${sep}><span class="subtle">—</span></td>`;
               const hrs = items.length * hoursPerDay;
               const tip = items.map((it) => `${fmtDate(it.iso)}${it.kind === 'holiday' ? ' (feestdag)' : ''}`).join(', ');
-              return `<td title="${tip}"><span class="badge badge-orange">${hrs.toFixed(1)} u</span></td>`;
+              return `<td ${sep} title="${tip}"><span class="badge badge-orange">${hrs.toFixed(1)} u</span></td>`;
             }).join('');
 
-            const totalCells = futureWeeks.map((w) => {
+            const totalCells = futureWeeks.map((w, i) => {
               const planned = totalPerWeek.get(w);
-              if (cap <= 0) return `<td><strong>${planned.toFixed(1)} u</strong></td>`;
-              const over = planned > cap + 0.01;
-              const cellStyle = over ? 'color:#b91c1c; background:rgba(239,68,68,.12)' : '';
+              const over = cap > 0 && planned > cap + 0.01;
+              const base = i === 0 ? SEP + '; ' : '';
+              const cellStyle = base + 'padding:6px 6px' + (over ? '; color:#b91c1c; background:rgba(239,68,68,.12)' : '');
+              if (cap <= 0) return `<td style="${cellStyle}"><strong>${planned.toFixed(1)} u</strong></td>`;
               return `<td style="${cellStyle}"><strong>${planned.toFixed(1)} / ${cap} u</strong></td>`;
             }).join('');
 
@@ -396,13 +407,14 @@
               <table class="table" style="margin:0">
                 <thead><tr>
                   <th>Project</th>
-                  <th>Uren door ${escapeHtml(firstName)}</th><th>Resterend</th><th>Totaal</th>
-                  ${futureWeeks.map((w) => `<th title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
+                  <th>Uren door ${escapeHtml(firstName)}</th><th>Resterend</th><th>Totaal</th><th>Ingepland</th>
+                  ${futureWeeks.map((w, i) => `<th style="${i === 0 ? SEP : ''}; padding:8px 6px" title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
                 </tr></thead>
                 <tbody>
                   ${rowsHtml}
                   <tr style="background:rgba(245,158,11,.06)">
                     <td><strong>Vakantie</strong> <span class="subtle" style="font-size:.8rem">(automatisch)</span></td>
+                    <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
@@ -413,19 +425,21 @@
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
                     <td><span class="subtle">—</span></td>
-                    ${futureWeeks.map((w) => {
+                    <td><span class="subtle">—</span></td>
+                    ${futureWeeks.map((w, i) => {
                       const entry = overigData[w] || {};
                       const h = entry.hours > 0 ? entry.hours : '';
                       const note = entry.note || '';
-                      return `<td style="min-width:120px">
-                        <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:64px; margin-bottom:.2rem">
+                      const sep = i === 0 ? SEP + '; ' : '';
+                      return `<td style="${sep}padding:6px 6px; min-width:110px">
+                        <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:54px; margin-bottom:.2rem">
                         <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:100%; font-size:.75rem; padding:.2rem .35rem">
                       </td>`;
                     }).join('')}
                   </tr>
                   <tr style="background:var(--bg-soft)">
                     <td><strong>Totaal per week</strong></td>
-                    <td colspan="3"><span class="subtle">—</span></td>
+                    <td colspan="4"><span class="subtle">—</span></td>
                     ${totalCells}
                   </tr>
                 </tbody>
