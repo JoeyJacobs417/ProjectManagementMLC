@@ -36,6 +36,9 @@
   </div>
   <div id="forecast"><p class="subtle">Laden…</p></div>
 
+  <h2 style="margin-top:2rem">Bezettingsoverzicht komende 4 weken</h2>
+  <div id="planning-overview"><p class="subtle">Laden…</p></div>
+
   <h2 style="margin-top:2rem">Komende deadlines</h2>
   <div id="deadlines"><p class="subtle">Laden…</p></div>
 </main>
@@ -375,7 +378,7 @@
         const bezetting = (cap > 0 && weekStarts.length > 0)
           ? Math.round((raw / (cap * weekStarts.length)) * 100)
           : null;
-        return { ...r, forecastRevenue: r.realizedRevenue + r.plannedRevenue, bezetting };
+        return { ...r, forecastRevenue: r.realizedRevenue + r.plannedRevenue, bezetting, rawHours: raw };
       })
       .filter((r) => r.realizedRevenue > 0 || r.plannedRevenue > 0 || r.potentialRevenue > 0)
       .sort((a, b) => b.forecastRevenue - a.forecastRevenue);
@@ -433,6 +436,27 @@
               <td><strong>${fmtEuro(r.forecastRevenue)}</strong></td>
             </tr>`).join('')}
         </tbody>
+        <tfoot>${(() => {
+          const totRealized = rows.reduce((a, r) => a + r.realizedRevenue, 0);
+          const totRealizedH = rows.reduce((a, r) => a + r.realizedHours, 0);
+          const totPotential = rows.reduce((a, r) => a + r.potentialRevenue, 0);
+          const totPlanned = rows.reduce((a, r) => a + r.plannedRevenue, 0);
+          const totPlannedH = rows.reduce((a, r) => a + r.plannedHours, 0);
+          const totForecast = rows.reduce((a, r) => a + r.forecastRevenue, 0);
+          const totRaw = rows.reduce((a, r) => a + (r.rawHours || 0), 0);
+          const totCap = rows.reduce((a, r) => a + (Number(capacities[r.id]) || 0) * weekStarts.length, 0);
+          const totBez = totCap > 0 ? Math.round((totRaw / totCap) * 100) : null;
+          const bezColor = totBez === null ? '' : totBez > 100 ? '#b91c1c' : totBez >= 80 ? '#047857' : '#b45309';
+          const tfStyle = 'padding:.6rem 1rem; border-top:2px solid var(--border); font-size:.9rem; background:var(--bg-soft)';
+          return `<tr>
+            <td style="${tfStyle}"><strong>Totaal</strong></td>
+            <td style="${tfStyle}">${totRealized > 0 ? `<strong>${fmtEuro(totRealized)}</strong> <span class="subtle">(${totRealizedH.toFixed(1)} u)</span>` : '<span class="subtle">—</span>'}</td>
+            <td style="${tfStyle}">${totPotential > 0 ? `<strong>${fmtEuro(totPotential)}</strong>` : '<span class="subtle">—</span>'}</td>
+            <td style="${tfStyle}">${totPlanned > 0 ? `<strong>${fmtEuro(totPlanned)}</strong> <span class="subtle">(${totPlannedH.toFixed(1)} u)</span>` : '<span class="subtle">—</span>'}</td>
+            <td style="${tfStyle}">${totBez !== null ? `<strong style="color:${bezColor}">${totBez}%</strong>` : '<span class="subtle">—</span>'}</td>
+            <td style="${tfStyle}"><strong>${fmtEuro(totForecast)}</strong></td>
+          </tr>`;
+        })()}</tfoot>
       </table>
       <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
         <strong>Reeds omgezet</strong> = uren in deze periode × uurtarief (per project gecapped op 100% verbruikt, tenzij uurtje-factuurtje).
@@ -445,6 +469,100 @@
   periodSel.addEventListener('change', renderForecast);
   monthInput.addEventListener('change', renderForecast);
   renderForecast();
+
+  // ── Bezettingsoverzicht (komende 4 weken) ──────────────────────
+  function renderPlanningOverview() {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const dow = today.getDay();
+    const thisMonday = new Date(today); thisMonday.setDate(today.getDate() + (dow === 0 ? -6 : 1 - dow));
+    const weeks = Array.from({ length: 4 }, (_, i) => {
+      const d = new Date(thisMonday); d.setDate(d.getDate() + i * 7); return isoOf(d);
+    });
+    const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+    const fmtShort = (iso) => { const [,m,d] = iso.split('-'); return `${Number(d)} ${months[Number(m)-1]}`; };
+
+    const empMap = new Map();
+    for (const p of baseProjects) {
+      if (p.status === 'done') continue;
+      for (const t of (p.team || [])) {
+        const key = String(t.moneybird_user_id || t.id || '').trim();
+        if (key && !empMap.has(key)) empMap.set(key, { id: key, name: t.name || '' });
+      }
+    }
+    const employees = Array.from(empMap.values())
+      .filter(e => e.name)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const el = document.getElementById('planning-overview');
+    if (employees.length === 0) { el.innerHTML = '<p class="subtle">Geen medewerkers gevonden.</p>'; return; }
+
+    const bodyRows = employees.map(emp => {
+      const cap = Number(capacities[emp.id]) || 0;
+      const hpd = cap > 0 ? cap / 5 : 8;
+      const empVac = vacations[emp.id] || [];
+      const empOverig = overigByEmp[emp.id] || {};
+
+      const cells = weeks.map(week => {
+        let projH = 0; const proj = [];
+        for (const p of baseProjects) {
+          if (p.status === 'done') continue;
+          const a = (p.weekly_allocations || []).find(x => x.moneybird_user_id === emp.id && x.week_start === week);
+          if (a && Number(a.hours) > 0) { projH += Number(a.hours); proj.push(`${escapeHtml(p.name)}: ${a.hours}u`); }
+        }
+        const overigE = empOverig[week]; const overigH = overigE ? Number(overigE.hours) || 0 : 0;
+        const [wy,wm,wd] = week.split('-').map(Number);
+        let vacDays = 0;
+        for (let i = 0; i < 5; i++) {
+          const dd = new Date(wy,wm-1,wd+i); const iso = isoOf(dd);
+          if (empVac.some(p => p.start <= iso && iso <= p.end)) vacDays++;
+        }
+        const vacH = vacDays * hpd;
+        const total = projH + overigH + vacH;
+        const breakdown = [
+          ...proj,
+          ...(overigH > 0 ? [`Overig${overigE?.note ? ': ' + overigE.note : ''}: ${overigH}u`] : []),
+          ...(vacDays > 0 ? [`Vakantie: ${vacH.toFixed(0)}u`] : []),
+        ];
+        return { total, cap, breakdown, hasVac: vacDays > 0 };
+      });
+
+      const cellHtml = cells.map(({ total, cap, breakdown }) => {
+        if (total === 0) return `<td style="text-align:center"><span class="subtle">—</span></td>`;
+        const pct = cap > 0 ? total / cap * 100 : null;
+        const [bg, col] = pct === null ? ['rgba(0,0,0,.04)', 'var(--text-muted)']
+          : pct > 100 ? ['rgba(185,28,28,.08)', '#b91c1c']
+          : pct >= 80  ? ['rgba(4,120,87,.08)',  '#047857']
+          :               ['rgba(180,83,9,.08)',  '#b45309'];
+        return `<td>
+          <div style="background:${bg};border-radius:6px;padding:5px 8px;text-align:center">
+            <div style="font-weight:500;color:${col};font-size:13px">${total % 1 === 0 ? total : total.toFixed(1)}${cap ? ' / ' + cap + 'u' : 'u'}</div>
+            ${pct !== null ? `<div style="font-size:11px;color:${col}">${Math.round(pct)}%</div>` : ''}
+            ${breakdown.length ? `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3">${breakdown.join(' · ')}</div>` : ''}
+          </div></td>`;
+      }).join('');
+
+      return `<tr>
+        <td><strong>${escapeHtml(emp.name)}</strong></td>
+        <td class="subtle" style="font-size:.85rem">${cap > 0 ? cap + 'u/wk' : '—'}</td>
+        ${cellHtml}
+      </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+      <table class="table" style="margin:0">
+        <thead><tr>
+          <th>Medewerker</th><th>Cap.</th>
+          ${weeks.map(w => `<th style="text-align:center">${fmtShort(w)}</th>`).join('')}
+        </tr></thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+      <p class="subtle" style="margin-top:.4rem;font-size:.8rem">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:rgba(4,120,87,.15);margin-right:4px"></span>≥ 80% &nbsp;
+        <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:rgba(180,83,9,.15);margin-right:4px"></span>&lt; 80% &nbsp;
+        <span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:rgba(185,28,28,.15);margin-right:4px"></span>&gt; 100%
+      </p>`;
+  }
+  renderPlanningOverview();
 
   // ── Komende deadlines (onderaan) ───────────────────────────────
   // Eén rij per deadline (een project kan er meerdere hebben).
