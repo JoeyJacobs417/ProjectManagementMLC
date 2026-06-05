@@ -330,8 +330,27 @@
       rec.potentialRevenue = (cap / 5) * workdays * AVG_HOURLY_RATE;
     }
 
+    // Bezetting: ruwe ingeplande uren / (capaciteit × weken) — niet budget-gecapped
+    const weekSet = new Set(weekStarts);
+    const rawHoursByEmp = new Map();
+    for (const p of projects) {
+      if (p.status === 'done') continue;
+      for (const a of (p.weekly_allocations || [])) {
+        if (!weekSet.has(a.week_start)) continue;
+        const id = a.moneybird_user_id;
+        rawHoursByEmp.set(id, (rawHoursByEmp.get(id) || 0) + (Number(a.hours) || 0));
+      }
+    }
+
     const rows = Array.from(empMap.values())
-      .map((r) => ({ ...r, forecastRevenue: r.realizedRevenue + r.plannedRevenue }))
+      .map((r) => {
+        const raw = rawHoursByEmp.get(r.id) || 0;
+        const cap = Number(capacities[r.id]) || 0;
+        const bezetting = (cap > 0 && weekStarts.length > 0)
+          ? Math.round((raw / (cap * weekStarts.length)) * 100)
+          : null;
+        return { ...r, forecastRevenue: r.realizedRevenue + r.plannedRevenue, bezetting };
+      })
       .filter((r) => r.realizedRevenue > 0 || r.plannedRevenue > 0 || r.potentialRevenue > 0)
       .sort((a, b) => b.forecastRevenue - a.forecastRevenue);
 
@@ -366,6 +385,7 @@
           <th title="Declarabele uren in deze periode × uurtarief. Voor projecten zonder uurtje-factuurtje tellen alleen uren tot 100% verbruikt.">Reeds omgezet</th>
           <th title="Werkbare uren in de periode × € ${AVG_HOURLY_RATE} (gemiddeld uurtarief).">Potentiele omzet</th>
           <th title="Ingeplande uren op de pagina Planning × uurtarief. Per project gecapped op resterend budget (tenzij uurtje-factuurtje).">Geplande omzet</th>
+          <th title="Ingeplande uren ÷ (capaciteit × aantal weken). Gebaseerd op de Planning-pagina, niet gecapped op budget.">Bezetting</th>
           <th title="Reeds omgezet + Geplande omzet.">Voorspelde omzet</th>
         </tr></thead>
         <tbody>
@@ -380,6 +400,9 @@
                 : '<span class="subtle">geen capaciteit</span>'}</td>
               <td>${r.plannedRevenue > 0
                 ? `<strong>${fmtEuro(r.plannedRevenue)}</strong> <span class="subtle">(${r.plannedHours.toFixed(1)} u)</span>`
+                : '<span class="subtle">—</span>'}</td>
+              <td>${r.bezetting !== null
+                ? `<strong style="color:${r.bezetting > 100 ? '#b91c1c' : r.bezetting >= 80 ? '#047857' : '#b45309'}">${r.bezetting}%</strong>`
                 : '<span class="subtle">—</span>'}</td>
               <td><strong>${fmtEuro(r.forecastRevenue)}</strong></td>
             </tr>`).join('')}
