@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="nl"><head>
+<meta charset="utf-8"><title>Omzet — Projectmanager</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<header class="topbar" id="topbar"></header>
+<main class="container">
+  <div class="page-header">
+    <h1>Omzet</h1>
+  </div>
+  <p class="subtle">Handmatige omzet die niet via Moneybird-uren loopt — bijvoorbeeld een betaalde feature met fixed price. Koppel een bedrag aan een medewerker en een maand; het telt mee in de kolom <strong>Reeds omgezet</strong> op het dashboard (en daarmee in de voorspelde omzet en je maandtarget). Een fixed-price post heeft geen uren, dus de bezetting blijft ongemoeid.</p>
+
+  <div id="content"><p class="subtle">Laden…</p></div>
+</main>
+<script type="module">
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, fmtEuro } from '/app.js';
+  const me = await renderTopbar('/omzet.html');
+  const isAdmin = me?.role === 'admin';
+  const content = document.getElementById('content');
+
+  if (!isAdmin) {
+    content.innerHTML = '<div class="card-static"><p>Deze pagina is alleen beschikbaar voor admins.</p></div>';
+    throw new Error('not admin');
+  }
+
+  function currentMonthIso() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  const [settingsResp, mbEmpResp] = await Promise.all([
+    apiGet('/api/admin/settings').catch(() => ({ settings: {} })),
+    apiGet('/api/moneybird/employees').catch(() => ({ employees: [] })),
+  ]);
+
+  const settings = settingsResp.settings || {};
+  let entries = Array.isArray(settings.manual_revenue) ? settings.manual_revenue.slice() : [];
+  const employees = (mbEmpResp.employees || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const nameById = new Map(employees.map((e) => [String(e.id), e.name]));
+
+  function empName(id, fallback) {
+    return nameById.get(String(id)) || fallback || 'Onbekend';
+  }
+
+  function monthLabel(iso) {
+    const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+    const [y, m] = String(iso).split('-').map(Number);
+    if (!y || !m) return iso;
+    return `${months[m - 1]} ${y}`;
+  }
+
+  async function save() {
+    // Stuur alleen de velden mee die het settings-endpoint verwacht/valideert.
+    const payload = entries.map((e) => ({
+      id: e.id,
+      moneybird_user_id: e.moneybird_user_id,
+      employee_name: empName(e.moneybird_user_id, e.employee_name),
+      month: e.month,
+      amount: e.amount,
+      description: e.description || '',
+      created_at: e.created_at,
+    }));
+    const resp = await apiSend('/api/admin/settings', 'POST', { manual_revenue: payload });
+    entries = Array.isArray(resp.settings?.manual_revenue) ? resp.settings.manual_revenue.slice() : entries;
+  }
+
+  function render() {
+    const empOptions = employees.length
+      ? employees.map((e) => `<option value="${escapeHtml(String(e.id))}">${escapeHtml(e.name || '')}</option>`).join('')
+      : '<option value="">(geen medewerkers gevonden)</option>';
+
+    const sorted = entries.slice().sort((a, b) =>
+      String(b.month).localeCompare(String(a.month)) ||
+      String(b.created_at || '').localeCompare(String(a.created_at || '')));
+
+    const rowsHtml = sorted.length
+      ? sorted.map((e) => `
+          <tr>
+            <td>${escapeHtml(monthLabel(e.month))}</td>
+            <td><strong>${escapeHtml(empName(e.moneybird_user_id, e.employee_name))}</strong></td>
+            <td>${escapeHtml(e.description || '')}</td>
+            <td style="text-align:right"><strong>${fmtEuro(Number(e.amount) || 0)}</strong></td>
+            <td style="text-align:right">
+              <button class="btn btn-ghost" data-del="${escapeHtml(String(e.id))}" title="Verwijderen" style="padding:.2rem .5rem">✕</button>
+            </td>
+          </tr>`).join('')
+      : '<tr><td colspan="5" class="subtle" style="text-align:center; padding:1rem">Nog geen handmatige omzet toegevoegd.</td></tr>';
+
+    const total = entries.reduce((a, e) => a + (Number(e.amount) || 0), 0);
+
+    content.innerHTML = `
+      <div class="card-static" style="margin-bottom:1.5rem">
+        <h3 style="margin-top:0">Omzetpost toevoegen</h3>
+        <form id="addForm" class="form">
+          <div style="display:grid; grid-template-columns:1.4fr 1fr 1fr; gap:1rem; align-items:end">
+            <div>
+              <label>Medewerker</label>
+              <select id="fEmp" required>${empOptions}</select>
+            </div>
+            <div>
+              <label>Maand</label>
+              <input type="month" id="fMonth" value="${currentMonthIso()}" required>
+            </div>
+            <div>
+              <label>Bedrag (€)</label>
+              <input type="number" id="fAmount" min="0" step="0.01" placeholder="0" required>
+            </div>
+          </div>
+          <div style="margin-top:1rem">
+            <label>Omschrijving (taak)</label>
+            <input type="text" id="fDesc" maxlength="500" placeholder="Bijv. Export-feature klant X">
+          </div>
+          <div style="margin-top:1rem">
+            <button class="btn btn-primary" type="submit">Toevoegen</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="card-static">
+        <h3 style="margin-top:0">Toegevoegde omzet</h3>
+        <table class="table" style="margin:0">
+          <thead><tr>
+            <th>Maand</th>
+            <th>Medewerker</th>
+            <th>Taak</th>
+            <th style="text-align:right">Bedrag</th>
+            <th></th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+          ${entries.length ? `<tfoot><tr>
+            <td colspan="3" style="border-top:2px solid var(--border)"><strong>Totaal</strong></td>
+            <td style="text-align:right; border-top:2px solid var(--border)"><strong>${fmtEuro(total)}</strong></td>
+            <td style="border-top:2px solid var(--border)"></td>
+          </tr></tfoot>` : ''}
+        </table>
+      </div>`;
+
+    document.getElementById('addForm').addEventListener('submit', onAdd);
+    content.querySelectorAll('button[data-del]').forEach((btn) => {
+      btn.addEventListener('click', () => onDelete(btn.getAttribute('data-del')));
+    });
+  }
+
+  async function onAdd(ev) {
+    ev.preventDefault();
+    const moneybird_user_id = document.getElementById('fEmp').value;
+    const month = document.getElementById('fMonth').value;
+    const amount = Number(document.getElementById('fAmount').value);
+    const description = document.getElementById('fDesc').value.trim();
+
+    if (!moneybird_user_id) { toast('Kies een medewerker.', 'error'); return; }
+    if (!/^\d{4}-\d{2}$/.test(month)) { toast('Kies een geldige maand.', 'error'); return; }
+    if (!Number.isFinite(amount) || amount <= 0) { toast('Vul een bedrag groter dan 0 in.', 'error'); return; }
+
+    entries.push({
+      id: 'mr_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      moneybird_user_id,
+      employee_name: empName(moneybird_user_id),
+      month,
+      amount,
+      description,
+      created_at: new Date().toISOString(),
+    });
+
+    try {
+      await save();
+      toast('Omzetpost toegevoegd.', 'success');
+      render();
+    } catch (err) {
+      toast('Opslaan mislukt: ' + (err.message || err), 'error');
+    }
+  }
+
+  async function onDelete(id) {
+    const before = entries.length;
+    entries = entries.filter((e) => String(e.id) !== String(id));
+    if (entries.length === before) return;
+    try {
+      await save();
+      toast('Verwijderd.', 'success');
+      render();
+    } catch (err) {
+      toast('Verwijderen mislukt: ' + (err.message || err), 'error');
+    }
+  }
+
+  render();
+</script>
+</body></html>

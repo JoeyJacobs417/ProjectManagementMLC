@@ -258,6 +258,16 @@
     return workdaysInRange(tomorrow, end, empVacations);
   }
 
+  // Klein ⓘ-teken met tooltip dat de losse handmatige omzetposten opsomt.
+  function manualBadge(posts) {
+    if (!posts || posts.length === 0) return '';
+    const lines = posts
+      .map((p) => `• ${p.description || 'Onbekende taak'} — ${fmtEuro(p.amount)}`)
+      .join('\n');
+    const title = `Handmatige omzet:\n${lines}`;
+    return ` <span style="cursor:help; color:var(--primary, #2563eb)" title="${escapeHtml(title)}">ⓘ</span>`;
+  }
+
   async function renderForecast() {
     sessionStorage.setItem(STORAGE_PERIOD, periodSel.value);
     sessionStorage.setItem(STORAGE_MONTH, monthInput.value || '');
@@ -285,6 +295,7 @@
           realizedHours: 0, realizedRevenue: 0,
           plannedHours: 0, plannedRevenue: 0,
           potentialRevenue: 0,
+          manualPosts: [],
         });
       }
       return empMap.get(id);
@@ -308,6 +319,16 @@
         const rec = ensureEmp(empId);
         rec.realizedHours = r.hours;
         rec.realizedRevenue = r.revenue;
+      }
+
+      // Handmatig toegevoegde omzet (pagina Omzet) voor deze maand — geen uren, alleen omzet.
+      for (const m of (settings.manual_revenue || [])) {
+        if (m.month !== monthIso) continue;
+        const amount = Number(m.amount) || 0;
+        if (amount <= 0) continue;
+        const rec = ensureEmp(String(m.moneybird_user_id), m.employee_name);
+        rec.realizedRevenue += amount;
+        rec.manualPosts.push({ description: m.description || '', amount });
       }
     }
 
@@ -422,7 +443,7 @@
             <tr>
               <td><strong>${escapeHtml(r.name)}</strong></td>
               <td>${r.realizedRevenue > 0
-                ? `<strong>${fmtEuro(r.realizedRevenue)}</strong> <span class="subtle">(${r.realizedHours.toFixed(1)} u)</span>`
+                ? `<strong>${fmtEuro(r.realizedRevenue)}</strong>${r.realizedHours > 0 ? ` <span class="subtle">(${r.realizedHours.toFixed(1)} u)</span>` : ''}${manualBadge(r.manualPosts)}`
                 : '<span class="subtle">—</span>'}</td>
               <td>${r.potentialRevenue > 0
                 ? fmtEuro(r.potentialRevenue)
@@ -459,7 +480,7 @@
         })()}</tfoot>
       </table>
       <p class="subtle" style="margin-top:.5rem; font-size:.85rem">
-        <strong>Reeds omgezet</strong> = uren in deze periode × uurtarief (per project gecapped op 100% verbruikt, tenzij uurtje-factuurtje).
+        <strong>Reeds omgezet</strong> = uren in deze periode × uurtarief (per project gecapped op 100% verbruikt, tenzij uurtje-factuurtje), plus handmatig toegevoegde omzet (pagina Omzet) — herkenbaar aan het ⓘ-teken.
         <strong>Potentiele omzet</strong> = werkbare uren in de periode (capaciteit ÷ 5 × werkdagen, excl. weekend/vakantie/feestdagen) × € ${AVG_HOURLY_RATE}.
         <strong>Geplande omzet</strong> = ingeplande uren (Planning-pagina) × uurtarief, per project gecapped op resterend budget tenzij uurtje-factuurtje.
         <strong>Voorspelde omzet</strong> = Reeds + Geplande.

@@ -216,6 +216,7 @@ export async function renderTopbar(activePath) {
     { href: '/planning.html', label: 'Planning' },
     { href: '/medewerkers.html', label: 'Medewerkers' },
   ];
+  if (isAdmin) links.push({ href: '/omzet.html', label: 'Omzet' });
   if (isAdmin) links.push({ href: '/admin-settings.html', label: 'Instellingen' });
   links.push({ href: '/reports.html', label: 'Rapportages' });
   const topbar = document.getElementById('topbar');

@@ -116,6 +116,35 @@ function normalizeDashboardPlanningEmployees(input) {
   return out;
 }
 
+function normalizeManualRevenue(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const m of input) {
+    if (!m || typeof m !== 'object') continue;
+    const moneybird_user_id = String(m.moneybird_user_id || '').trim();
+    const month = String(m.month || '').trim();
+    const amount = Number(m.amount);
+    if (!moneybird_user_id) continue;
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const id = String(m.id || '').trim() || 'mr_' + crypto.randomBytes(6).toString('hex');
+    const employee_name = String(m.employee_name || '').trim().slice(0, 200);
+    const description = String(m.description || '').trim().slice(0, 500);
+    const created_at = String(m.created_at || '').trim() || new Date().toISOString();
+    out.push({
+      id,
+      moneybird_user_id,
+      employee_name,
+      month,
+      amount: Math.round(amount * 100) / 100,
+      description,
+      created_at,
+    });
+  }
+  out.sort((a, b) => (b.month.localeCompare(a.month)) || (b.created_at.localeCompare(a.created_at)));
+  return out;
+}
+
 function normalizeOverig(input) {
   if (!input || typeof input !== 'object') return {};
   const out = {};
@@ -188,6 +217,7 @@ export default async function handler(req, res) {
     if (b.monthly_revenue_targets !== undefined) patch.monthly_revenue_targets = normalizeMonthlyRevenueTargets(b.monthly_revenue_targets);
     if (b.dashboard_planning_employees !== undefined) patch.dashboard_planning_employees = normalizeDashboardPlanningEmployees(b.dashboard_planning_employees);
     if (b.employee_overig !== undefined) patch.employee_overig = normalizeOverig(b.employee_overig);
+    if (b.manual_revenue !== undefined) patch.manual_revenue = normalizeManualRevenue(b.manual_revenue);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });
     return;
