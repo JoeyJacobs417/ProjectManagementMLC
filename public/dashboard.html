@@ -53,6 +53,7 @@
   const capacities = settings.employee_capacities || {};
   const vacations = settings.employee_vacations || {};
   const overigByEmp = settings.employee_overig || {};
+  const planningEmps = new Set(settings.planning_employees || []);
   let monthlyTargets = settings.monthly_revenue_targets || {};
 
   function isoOf(d) {
@@ -510,12 +511,13 @@
         if (key && !empMap.has(key)) empMap.set(key, { id: key, name: t.name || '' });
       }
     }
+    // Opt-in: alleen medewerkers die via de medewerkers-pagina zijn aangevinkt voor planning.
     const employees = Array.from(empMap.values())
-      .filter(e => e.name)
+      .filter(e => e.name && planningEmps.has(e.id))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const el = document.getElementById('planning-overview');
-    if (employees.length === 0) { el.innerHTML = '<p class="subtle">Geen medewerkers gevonden.</p>'; return; }
+    if (employees.length === 0) { el.innerHTML = '<p class="subtle">Geen medewerkers geselecteerd voor de planning. Vink medewerkers aan via de kolom "Planning" op de <a href="/medewerkers.html">medewerkers-pagina</a>.</p>'; return; }
 
     const bodyRows = employees.map(emp => {
       const cap = Number(capacities[emp.id]) || 0;
