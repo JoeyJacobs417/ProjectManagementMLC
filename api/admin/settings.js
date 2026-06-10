@@ -209,6 +209,11 @@ export default async function handler(req, res) {
       const n = Math.trunc(Number(b.report_day_of_month));
       patch.report_day_of_month = Number.isFinite(n) && n >= 1 && n <= 28 ? n : 1;
     }
+    if (b.report_hour !== undefined) {
+      // Leeg = geen uur-afdwinging (verstuur op het standaard cron-moment).
+      const h = (b.report_hour === '' || b.report_hour === null) ? null : Math.trunc(Number(b.report_hour));
+      patch.report_hour = (Number.isInteger(h) && h >= 0 && h <= 23) ? h : null;
+    }
     if (b.employee_capacities !== undefined) patch.employee_capacities = normalizeCapacities(b.employee_capacities);
     if (b.employee_vacations !== undefined) patch.employee_vacations = normalizeVacations(b.employee_vacations);
     if (b.clients !== undefined) patch.clients = normalizeClients(b.clients);

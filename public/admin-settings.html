@@ -63,7 +63,12 @@
         <label>Ontvangers (komma-gescheiden)
           <input type="text" name="report_recipients" placeholder="bv. joey@bedrijf.nl">
         </label>
-        <label></label>
+        <label>Verzendtijd (uur, UTC)
+          <select name="report_hour">
+            <option value="">— standaard cron-moment —</option>
+          </select>
+          <small class="subtle">Leeg = versturen wanneer de dagelijkse cron draait. Een uur invullen dwingt dat uur af; op Vercel Hobby moet de cron (vercel.json) dan op datzelfde uur staan.</small>
+        </label>
         <label></label>
       </div>
       <div>
@@ -139,11 +144,20 @@
     domSel.appendChild(o);
   }
 
+  // Vul verzendtijd dropdown (00:00–23:00 UTC).
+  const hourSel = document.querySelector('[name=report_hour]');
+  for (let h = 0; h <= 23; h++) {
+    const o = document.createElement('option');
+    o.value = String(h);
+    o.textContent = `${String(h).padStart(2, '0')}:00`;
+    hourSel.appendChild(o);
+  }
+
   for (const k of [
     'threshold_warning', 'threshold_critical', 'threshold_exceeded',
     'inactivity_days', 'deadline_alert_days', 'notify_emails_extra',
     'report_period', 'report_recipients',
-    'report_day_of_week', 'report_day_of_month',
+    'report_day_of_week', 'report_day_of_month', 'report_hour',
   ]) {
     const el = document.querySelector(`[name=${k}]`);
     if (el) el.value = settings[k] ?? '';
@@ -187,6 +201,7 @@
       report_recipients: f.get('report_recipients'),
       report_day_of_week: f.get('report_day_of_week'),
       report_day_of_month: f.get('report_day_of_month'),
+      report_hour: f.get('report_hour'),
     });
   }
   document.getElementById('settingsForm').addEventListener('submit', async (e) => {
