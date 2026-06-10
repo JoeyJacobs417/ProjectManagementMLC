@@ -221,6 +221,7 @@ export default async function handler(req, res) {
     if (b.hidden_employees !== undefined) patch.hidden_employees = normalizeHiddenEmployees(b.hidden_employees);
     if (b.monthly_revenue_targets !== undefined) patch.monthly_revenue_targets = normalizeMonthlyRevenueTargets(b.monthly_revenue_targets);
     if (b.dashboard_planning_employees !== undefined) patch.dashboard_planning_employees = normalizeDashboardPlanningEmployees(b.dashboard_planning_employees);
+    if (b.planning_employees !== undefined) patch.planning_employees = normalizeHiddenEmployees(b.planning_employees);
     if (b.employee_overig !== undefined) patch.employee_overig = normalizeOverig(b.employee_overig);
     if (b.manual_revenue !== undefined) patch.manual_revenue = normalizeManualRevenue(b.manual_revenue);
     const next = await saveSettings(patch);

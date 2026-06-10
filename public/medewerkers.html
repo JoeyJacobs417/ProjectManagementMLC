@@ -19,7 +19,7 @@
       <span class="subtle" id="countLabel"></span>
     </div>
   </div>
-  <p class="subtle">Capaciteit, prestaties en declarabiliteit per medewerker. Klik op een rij voor de uren-detailpagina (laatste 4 weken). Klik op een kolomkop om te sorteren. Admins kunnen capaciteiten aanpassen en medewerkers verbergen die niet relevant zijn (bv. marketing).</p>
+  <p class="subtle">Capaciteit, prestaties en declarabiliteit per medewerker. Klik op een rij voor de uren-detailpagina (laatste 4 weken). Klik op een kolomkop om te sorteren. Admins kunnen capaciteiten aanpassen, medewerkers verbergen die niet relevant zijn (bv. marketing) en via het vinkje "Planning" bepalen wie op de planningpagina getoond wordt.</p>
 
   <div id="content"><p class="subtle">Laden…</p></div>
 
@@ -49,12 +49,13 @@
 
   const [{ projects }, settingsResp, mbEmpResp] = await Promise.all([
     apiGet('/api/projects'),
-    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, hidden_employees: [] } })),
+    apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, hidden_employees: [], planning_employees: [] } })),
     fetchEmployees(false),
   ]);
   const settings = settingsResp.settings;
   let capacities = settings.employee_capacities || {};
   let hiddenIds = new Set(settings.hidden_employees || []);
+  let planningIds = new Set(settings.planning_employees || []);
   let mbEmployees = mbEmpResp.employees || [];
 
   const empMap = new Map();
@@ -135,6 +136,7 @@
             <th data-sort="billable" class="${sortKey === 'billable' ? 'active' : ''}">Declarabele uren ${sortIndicator('billable')}</th>
             <th data-sort="declarabilityPct" class="${sortKey === 'declarabilityPct' ? 'active' : ''}">Declarabiliteit ${sortIndicator('declarabilityPct')}</th>
             <th data-sort="withinBudgetPct" class="${sortKey === 'withinBudgetPct' ? 'active' : ''}">Binnen budget ${sortIndicator('withinBudgetPct')}</th>
+            <th title="Toon deze medewerker op de planningpagina">Planning</th>
             ${isAdmin ? '<th></th>' : ''}
           </tr></thead>
           <tbody>
@@ -152,6 +154,9 @@
                   <td>${e.billable.toFixed(1)} u</td>
                   <td>${declBadge}</td>
                   <td>${wbBadge}</td>
+                  <td>${isAdmin
+                    ? `<input type="checkbox" data-planning="${e.id}" data-stop ${planningIds.has(e.id) ? 'checked' : ''} title="Toon op planningpagina">`
+                    : (planningIds.has(e.id) ? '✓' : '<span class="subtle">—</span>')}</td>
                   ${isAdmin ? `<td><button class="btn btn-ghost" type="button" data-hide="${e.id}" data-stop style="font-size:.8rem; padding:.25rem .5rem">Verberg</button></td>` : ''}
                 </tr>`;
             }).join('')}
@@ -178,6 +183,26 @@
           sessionStorage.setItem(SORT_KEY_STORAGE, sortKey);
           sessionStorage.setItem(SORT_DIR_STORAGE, String(sortDir));
           renderTable();
+        };
+      }
+
+      for (const cb of c.querySelectorAll('input[data-planning]')) {
+        cb.onclick = (ev) => ev.stopPropagation();
+        cb.onchange = async () => {
+          const id = cb.dataset.planning;
+          if (cb.checked) planningIds.add(id);
+          else planningIds.delete(id);
+          try {
+            const r = await apiSend('/api/admin/settings', 'POST', { planning_employees: Array.from(planningIds) });
+            planningIds = new Set(r.settings.planning_employees || []);
+            toast(cb.checked ? 'Medewerker toegevoegd aan planning' : 'Medewerker verwijderd van planning', 'success');
+          } catch (err) {
+            // Terugdraaien bij fout
+            if (cb.checked) planningIds.delete(id);
+            else planningIds.add(id);
+            cb.checked = !cb.checked;
+            toast(err.message, 'error');
+          }
         };
       }
 

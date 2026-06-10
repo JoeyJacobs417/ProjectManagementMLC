@@ -19,7 +19,7 @@
       <button class="btn btn-ghost" id="exportBtn">⬇ Export Excel</button>
     </div>
   </div>
-  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum. On hold-projecten tellen niet mee voor resterende uren of einddatum. Inclusief Nederlandse feestdagen.</p>
+  <p class="subtle">Per medewerker: toegewezen projecten (In progress / On hold / Future), vakantie, weekoverzicht en geschatte einddatum. On hold-projecten tellen niet mee voor resterende uren of einddatum. Inclusief Nederlandse feestdagen. Alleen medewerkers die via de medewerkers-pagina zijn aangevinkt voor planning worden getoond; admins kunnen ze hier weer uitvinken.</p>
 
   <div class="card-static" style="margin-bottom:1rem; padding:.75rem 1rem">
     <label style="display:flex; flex-direction:row; align-items:center; gap:.75rem; margin:0; font-weight:500">
@@ -107,13 +107,14 @@
 
   let projects = [], capacities = {}, vacationsByEmp = {}, overigByEmp = {};
   let dashboardEmps = new Set();
+  let planningEmps = new Set();
 
   async function loadAllData() {
     document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
 
     const [projResp, settingsResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
-      apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [] } })),
+      apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [], planning_employees: [] } })),
     ]);
 
     projects = projResp.projects;
@@ -121,6 +122,7 @@
     vacationsByEmp = settingsResp.settings.employee_vacations || {};
     overigByEmp = settingsResp.settings.employee_overig || {};
     dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
+    planningEmps = new Set(settingsResp.settings.planning_employees || []);
 
     rebuildEmployees();
     render();
@@ -149,13 +151,17 @@
         if (p.status === 'future') rec.newCount += 1;
       }
     }
-    employees = Array.from(byEmp.values()).sort((a, b) => b.totalRemaining - a.totalRemaining);
+    // Opt-in: alleen medewerkers die via de medewerkers-pagina zijn aangevinkt voor planning.
+    employees = Array.from(byEmp.values())
+      .filter((e) => planningEmps.has(e.id))
+      .sort((a, b) => b.totalRemaining - a.totalRemaining);
 
     const empFilter = document.getElementById('empFilter');
     const cur = empFilter.value || sessionStorage.getItem(STORAGE_KEY) || 'all';
     empFilter.innerHTML = '<option value="all">Alle medewerkers</option>' +
       employees.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join('');
     empFilter.value = cur;
+    if (!empFilter.value) empFilter.value = 'all';
   }
 
   function buildWeeklyForEmployee(empId) {
@@ -194,6 +200,18 @@
     });
   }
 
+  async function togglePlanningEmp(empId, on) {
+    const next = new Set(planningEmps);
+    if (on) next.add(empId); else next.delete(empId);
+    try {
+      const r = await apiSend('/api/admin/settings', 'POST', { planning_employees: Array.from(next) });
+      planningEmps = new Set(r.settings.planning_employees || []);
+      toast(on ? 'Medewerker toegevoegd aan planning' : 'Medewerker verwijderd van planning', 'success');
+      rebuildEmployees();
+      render();
+    } catch (err) { toast(err.message, 'error'); }
+  }
+
   async function toggleDashboardEmp(empId, on) {
     const next = new Set(dashboardEmps);
     if (on) next.add(empId); else next.delete(empId);
@@ -215,7 +233,7 @@
 
     const c = document.getElementById('content');
     if (employees.length === 0) {
-      c.innerHTML = `<p class="subtle">Geen actieve medewerkers met toegewezen projecten in status "In progress", "Future" of "On hold".</p>`;
+      c.innerHTML = `<p class="subtle">Geen medewerkers geselecteerd voor de planning. Vink medewerkers aan via de kolom "Planning" op de <a href="/medewerkers.html">medewerkers-pagina</a>. Alleen medewerkers met toegewezen projecten in status "In progress", "Future", "On hold" of "Recurring" worden getoond.</p>`;
       return;
     }
     if (shown.length === 0) {
@@ -281,6 +299,7 @@
             <div>
               <h2 style="margin:0">${escapeHtml(e.name)}</h2>
               <a href="${detailHref}" style="font-size:.85rem">→ Uren laatste 4 weken</a>
+              ${isAdmin ? `<label style="display:block; margin-top:.35rem; font-size:.85rem; cursor:pointer"><input type="checkbox" data-planning-emp="${e.id}" checked style="vertical-align:middle; margin-right:.3rem">Toon op planning</label>` : ''}
             </div>
             <div class="subtle" style="text-align:right">
               <div>Werkt aan <strong>${e.rows.length}</strong> ${e.rows.length === 1 ? 'project' : 'projecten'}</div>
@@ -486,6 +505,19 @@
         } finally {
           inp.disabled = false;
         }
+      };
+    }
+
+    for (const cb of c.querySelectorAll('input[data-planning-emp]')) {
+      cb.onchange = async () => {
+        if (cb.checked) return;
+        const empId = cb.dataset.planningEmp;
+        const emp = employees.find((x) => x.id === empId);
+        if (!confirm(`"${emp?.name || 'Deze medewerker'}" niet meer tonen op de planning? Je kunt dit terugzetten via de medewerkers-pagina.`)) {
+          cb.checked = true;
+          return;
+        }
+        await togglePlanningEmp(empId, false);
       };
     }
 
