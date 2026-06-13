@@ -10,7 +10,7 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, MODULE_OPTIONS, statusLabel, deadlineBadge, fmtDate, fmtDateTime, activityDescription } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, progressBarClass, STATUS_OPTIONS, MODULE_OPTIONS, statusLabel, deadlineBadge, fmtDate, fmtDateTime, activityDescription, SENTIMENT_OPTIONS, sentimentMeta, sentimentLabel, sentimentDot } from '/app.js';
   const me = await renderTopbar('/projects.html');
 
   const id = new URLSearchParams(location.search).get('id');
@@ -87,6 +87,49 @@
           </div>`).join('')
       : '<p class="subtle" style="margin:0">Nog geen notities.</p>';
 
+    // ── Sentiment ("stoplicht") ──────────────────────────────────────
+    const curSentiment = project.sentiment || '';
+    const curMeta = sentimentMeta(curSentiment);
+    const sentimentButtons = SENTIMENT_OPTIONS.map((o) => {
+      const active = o.value === curSentiment;
+      const style = active
+        ? `background:${o.color}; color:#fff; border-color:${o.color}`
+        : `background:transparent; color:${o.color}; border:1px solid ${o.color}`;
+      return `<button type="button" class="btn" data-sentiment="${o.value}" style="${style}; padding:.4rem .9rem">
+        <span style="display:inline-block; width:.7rem; height:.7rem; border-radius:50%; background:${active ? '#fff' : o.color}; vertical-align:middle; margin-right:.4rem"></span>${o.label}</button>`;
+    }).join(' ');
+    const sentimentMeta_who = (curMeta && project.sentiment_at)
+      ? `<p class="subtle" style="margin:.5rem 0 0; font-size:.85rem">Gegeven door <strong>${escapeHtml(project.sentiment_by || 'Onbekend')}</strong> op ${new Date(project.sentiment_at).toLocaleString('nl-NL')}</p>`
+      : '<p class="subtle" style="margin:.5rem 0 0; font-size:.85rem">Nog geen sentiment ingesteld.</p>';
+    const sentimentHistory = [...(project.activity_log || [])]
+      .filter((a) => a.action === 'sentiment_changed')
+      .reverse();
+    const sentimentHistoryHtml = sentimentHistory.length > 0
+      ? `<h4 style="margin:1rem 0 .25rem">Geschiedenis</h4>
+         <table class="table" style="margin:0"><thead><tr><th>Wanneer</th><th>Door</th><th>Wijziging</th></tr></thead><tbody>
+          ${sentimentHistory.map((a) => `
+            <tr>
+              <td>${new Date(a.timestamp).toLocaleString('nl-NL')}</td>
+              <td>${escapeHtml(a.user_name)}</td>
+              <td>${sentimentDot((a.details || {}).from, true)} → ${sentimentDot((a.details || {}).to, true)}</td>
+            </tr>`).join('')}
+         </tbody></table>`
+      : '<p class="subtle" style="margin:1rem 0 0; font-size:.85rem">Nog geen wijzigingen gelogd.</p>';
+    const sentimentCardHtml = `
+      <div class="card-static" style="margin-top:1rem">
+        <div class="card-header-row" style="align-items:center; gap:.5rem">
+          <h3 style="margin:0">Sentiment</h3>
+          ${curMeta ? sentimentDot(curSentiment, true) : ''}
+        </div>
+        <p class="subtle" style="margin:.25rem 0 .75rem; font-size:.85rem">Jouw waardeoordeel over het verloop van dit project (stoplicht). Wordt getoond in de projectenlijst en de periodieke rapportage.</p>
+        <div style="display:flex; gap:.5rem; flex-wrap:wrap; align-items:center">
+          ${sentimentButtons}
+          ${curMeta ? `<button type="button" class="btn btn-ghost" data-sentiment="" style="padding:.4rem .9rem">Wis</button>` : ''}
+        </div>
+        ${sentimentMeta_who}
+        ${sentimentHistoryHtml}
+      </div>`;
+
     c.innerHTML = `
       <div class="page-header">
         <div style="flex:1">
@@ -111,6 +154,8 @@
           <button class="btn btn-primary" id="syncBtn">Synchroniseer Moneybird</button>
         </div>
       </div>
+
+      ${sentimentCardHtml}
 
       <div class="grid grid-2">
         <div class="card-static">
@@ -295,6 +340,18 @@
     };
 
     if (canDelete) document.getElementById('deleteProjectBtn').onclick = deleteProjectFlow;
+
+    document.querySelectorAll('[data-sentiment]').forEach((btn) => {
+      btn.onclick = async () => {
+        const value = btn.dataset.sentiment;
+        if ((project.sentiment || '') === value) return;
+        try {
+          await apiSend(`/api/projects/${encodeURIComponent(id)}`, 'PATCH', { sentiment: value });
+          toast(value ? `Sentiment op ${sentimentLabel(value)} gezet` : 'Sentiment gewist', 'success');
+          await load();
+        } catch (err) { toast(err.message, 'error'); }
+      };
+    });
 
     document.getElementById('syncBtn').onclick = async () => {
       try {

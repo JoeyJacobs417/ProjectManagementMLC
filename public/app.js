@@ -62,6 +62,27 @@ export function statusLabel(value) {
 
 export const MODULE_OPTIONS = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
 
+// Sentiment ("stoplicht") — proactief waardeoordeel van de PM over het projectverloop.
+export const SENTIMENT_OPTIONS = [
+  { value: 'green',  label: 'Groen',  color: '#047857' },
+  { value: 'orange', label: 'Oranje', color: '#b45309' },
+  { value: 'red',    label: 'Rood',   color: '#b91c1c' },
+];
+export function sentimentMeta(value) {
+  return SENTIMENT_OPTIONS.find((o) => o.value === value) || null;
+}
+export function sentimentLabel(value) {
+  const m = sentimentMeta(value);
+  return m ? m.label : '—';
+}
+// Gekleurde stip; optioneel met label erachter.
+export function sentimentDot(value, withLabel = false) {
+  const m = sentimentMeta(value);
+  if (!m) return '<span class="subtle">—</span>';
+  const dot = `<span title="${m.label}" style="display:inline-block; width:.7rem; height:.7rem; border-radius:50%; background:${m.color}; vertical-align:middle"></span>`;
+  return withLabel ? `${dot} <span style="color:${m.color}; font-weight:600">${m.label}</span>` : dot;
+}
+
 export function fmtDate(iso) {
   if (!iso) return '';
   const [y, m, d] = String(iso).split('-');
@@ -177,6 +198,7 @@ const ACTION_LABELS = {
   start_date_changed: 'Startdatum gewijzigd',
   client_changed: 'Klant gewijzigd',
   poc_changed: 'POC-status gewijzigd',
+  sentiment_changed: 'Sentiment gewijzigd',
   feature_requests_changed: 'Feature requests bijgewerkt',
   team_added: 'Teamlid toegevoegd',
   team_removed: 'Teamlid verwijderd',
@@ -202,6 +224,7 @@ export function activityDescription(entry) {
   }
   if (entry.action === 'team_added' || entry.action === 'team_removed') return `${label}: ${d.name || ''}`;
   if (entry.action === 'poc_changed') return `${label}: ${d.to ? 'Ja' : 'Nee'}`;
+  if (entry.action === 'sentiment_changed') return `${label}: ${sentimentLabel(d.from)} → ${sentimentLabel(d.to)}`;
   if (entry.action === 'pdf_uploaded') return `${label}: ${d.filename || ''}`;
   return label;
 }

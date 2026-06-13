@@ -20,6 +20,7 @@ import { diffProjectActivity, appendActivity, logActivity } from '../../../lib/a
 
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future', 'recurring'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
+const VALID_SENTIMENTS = ['green', 'orange', 'red', ''];
 const EDITABLE_FIELDS = [
   'name', 'description', 'available_hours', 'hourly_rate',
   'exceptions', 'manager_id', 'client_id', 'feature_requests',
@@ -165,6 +166,10 @@ async function buildDetail(project) {
     is_poc: !!project.is_poc,
     is_hourly_billing: !!project.is_hourly_billing,
     feature_requests: project.feature_requests || '',
+    sentiment: project.sentiment || '',
+    sentiment_by: project.sentiment_by || null,
+    sentiment_by_id: project.sentiment_by_id || null,
+    sentiment_at: project.sentiment_at || null,
     client_id: project.client_id || '',
     contacts: Array.isArray(project.contacts) ? project.contacts : [],
     team_allocations: Array.isArray(project.team_allocations) ? project.team_allocations : [],
@@ -299,6 +304,18 @@ export default async function handler(req, res) {
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
     if (b.team_allocations !== undefined) project.team_allocations = normalizeTeamAllocations(b.team_allocations);
     if (b.weekly_allocations !== undefined) project.weekly_allocations = normalizeWeeklyAllocations(b.weekly_allocations);
+    if (b.sentiment !== undefined) {
+      const next = String(b.sentiment || '').toLowerCase();
+      const val = VALID_SENTIMENTS.includes(next) ? next : '';
+      const prev = project.sentiment || '';
+      if (val !== prev) {
+        project.sentiment = val;
+        project.sentiment_by_id = user.id;
+        project.sentiment_by = user.name;
+        project.sentiment_at = new Date().toISOString();
+        logActivity(project, user, 'sentiment_changed', { from: prev, to: val });
+      }
+    }
     if (typeof project.available_hours === 'string') project.available_hours = Number(project.available_hours) || 0;
     if (typeof project.hourly_rate === 'string') project.hourly_rate = Number(project.hourly_rate) || 0;
 

@@ -46,7 +46,7 @@
   <div id="content"><p class="subtle">Laden…</p></div>
 </main>
 <script type="module">
-  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, percentageBadgeClass, statusLabel, fmtDateTime } from '/app.js';
+  import { apiGet, apiSend, renderTopbar, toast, escapeHtml, percentageBadgeClass, statusLabel, fmtDateTime, sentimentDot } from '/app.js';
   await renderTopbar('/projects.html');
 
   let projects = [];
@@ -185,7 +185,7 @@
     content.innerHTML = `
       <table class="table">
         <thead><tr>
-          <th>Project</th><th>Status</th><th>Modules</th>
+          <th>Project</th><th>Status</th><th>Sentiment</th><th>Modules</th>
           <th>PM</th><th>Team</th><th>Uren</th>
           <th data-sort="pct" class="${pctSortDir !== 0 ? 'active' : ''}">% <span class="sort-arrow">${pctArrow}</span></th>
           <th>PDF</th>
@@ -200,6 +200,7 @@
               <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
                 <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
                 <td><span class="badge status-${s}">${statusLabel(s)}</span></td>
+                <td style="text-align:center">${sentimentDot(p.sentiment, false)}</td>
                 <td>${modulesCell(p.modules)}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>
                 <td>${teamCell(p.team)}</td>
