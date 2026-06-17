@@ -199,7 +199,7 @@
             return `
               <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
                 <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-                <td><span class="badge status-${s}">${statusLabel(s)}</span></td>
+                <td><span class="badge status-${s}">${s === 'in_progress' ? 'WIP' : statusLabel(s)}</span></td>
                 <td style="text-align:center">${sentimentDot(p.sentiment, false)}</td>
                 <td>${modulesCell(p.modules)}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>
