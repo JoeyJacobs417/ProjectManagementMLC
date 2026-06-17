@@ -590,39 +590,90 @@
   // ── Komende deadlines (onderaan) ───────────────────────────────
   // Eén rij per deadline (een project kan er meerdere hebben).
   const deadlinesEl = document.getElementById('deadlines');
+  const deadlineKey = (date, description) => `${String(date || '').trim()}|${String(description || '').trim()}`;
   const deadlineRows = [];
   for (const p of baseProjects) {
     if (p.status === 'done') continue;
     const list = (p.deadlines && p.deadlines.length) ? p.deadlines : (p.deadline ? [{ date: p.deadline, description: '' }] : []);
+    const dismissedSet = new Set(Array.isArray(p.dismissed_deadlines) ? p.dismissed_deadlines : []);
     for (const d of list) {
       const days = daysFromNow(d.date);
       if (days === null) continue;
-      deadlineRows.push({ p, date: d.date, description: d.description || '', days });
+      const description = d.description || '';
+      const key = deadlineKey(d.date, description);
+      deadlineRows.push({ p, date: d.date, description, days, key, rowId: `${p.id}::${key}`, dismissed: dismissedSet.has(key) });
     }
   }
   deadlineRows.sort((a, b) => a.days - b.days);
-  const shownDeadlines = deadlineRows.slice(0, 15);
-  if (shownDeadlines.length === 0) {
-    deadlinesEl.innerHTML = '<p class="subtle">Geen openstaande deadlines.</p>';
-  } else {
-    deadlinesEl.innerHTML = `
-      <table class="table" style="margin:0">
-        <thead><tr><th>Project</th><th>Deadline</th><th>Omschrijving</th><th>Projectmanager</th><th>Status</th><th>Uren</th></tr></thead>
-        <tbody>
-          ${shownDeadlines.map(({ p, date, description }) => `
-            <tr class="clickable" data-id="${encodeURIComponent(p.id)}">
-              <td><strong>${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
-              <td>${deadlineBadge(date)}</td>
-              <td>${description ? escapeHtml(description) : '<span class="subtle">—</span>'}</td>
-              <td>${escapeHtml(p.manager_name || '—')}</td>
-              <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
-              <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
+
+  let showDismissedDeadlines = false;
+
+  async function toggleDeadline(row, dismissed, checkboxEl) {
+    if (checkboxEl) checkboxEl.disabled = true;
+    try {
+      await apiSend(`/api/projects/${encodeURIComponent(row.p.id)}`, 'PATCH', {
+        dismiss_deadline: { date: row.date, description: row.description, dismissed },
+      });
+      row.dismissed = dismissed;
+      renderDeadlines();
+    } catch (err) {
+      toast(err.message, 'error');
+      if (checkboxEl) { checkboxEl.checked = !dismissed; checkboxEl.disabled = false; }
+    }
+  }
+
+  function renderDeadlines() {
+    const dismissedCount = deadlineRows.filter((r) => r.dismissed).length;
+    const visible = deadlineRows
+      .filter((r) => showDismissedDeadlines || !r.dismissed)
+      .slice(0, 15);
+
+    const toggleHtml = dismissedCount > 0
+      ? `<label class="subtle" style="display:inline-flex; align-items:center; gap:.4rem; font-weight:400; margin-bottom:.5rem">
+           <input type="checkbox" id="showDismissedDeadlines" style="width:auto" ${showDismissedDeadlines ? 'checked' : ''}>
+           Toon afgevinkte deadlines (${dismissedCount})
+         </label>`
+      : '';
+
+    if (visible.length === 0) {
+      deadlinesEl.innerHTML = `${toggleHtml}<p class="subtle">Geen openstaande deadlines.</p>`;
+    } else {
+      deadlinesEl.innerHTML = `
+        ${toggleHtml}
+        <table class="table" style="margin:0">
+          <thead><tr><th style="width:1%"></th><th>Project</th><th>Deadline</th><th>Omschrijving</th><th>Projectmanager</th><th>Status</th><th>Uren</th></tr></thead>
+          <tbody>
+            ${visible.map((row) => {
+              const { p, date, description, dismissed } = row;
+              return `
+              <tr class="clickable" data-rowid="${escapeHtml(row.rowId)}"${dismissed ? ' style="opacity:.55"' : ''}>
+                <td data-stop style="text-align:center"><input type="checkbox" class="deadline-check" style="width:auto" ${dismissed ? 'checked' : ''} title="Afvinken (verbergen uit dit overzicht)"></td>
+                <td><strong style="${dismissed ? 'text-decoration:line-through' : ''}">${escapeHtml(p.name)}</strong>${p.is_poc ? ' <span class="badge" style="background:rgba(139,92,246,.15);color:#6d28d9">POC</span>' : ''}</td>
+                <td>${deadlineBadge(date)}</td>
+                <td>${description ? escapeHtml(description) : '<span class="subtle">—</span>'}</td>
+                <td>${escapeHtml(p.manager_name || '—')}</td>
+                <td><span class="badge status-${p.status}">${statusLabel(p.status)}</span></td>
+                <td>${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    const showCb = document.getElementById('showDismissedDeadlines');
+    if (showCb) showCb.onchange = () => { showDismissedDeadlines = showCb.checked; renderDeadlines(); };
+
     deadlinesEl.querySelectorAll('tr.clickable').forEach((tr) => {
-      tr.onclick = () => location.href = `/project.html?id=${tr.dataset.id}`;
+      const row = deadlineRows.find((r) => r.rowId === tr.dataset.rowid);
+      const cb = tr.querySelector('.deadline-check');
+      if (cb && row) cb.onchange = (ev) => { ev.stopPropagation(); toggleDeadline(row, cb.checked, cb); };
+      tr.onclick = (ev) => {
+        if (ev.target.closest('[data-stop]')) return;
+        location.href = `/project.html?id=${encodeURIComponent(row ? row.p.id : '')}`;
+      };
     });
   }
+
+  renderDeadlines();
 </script>
 </body></html>

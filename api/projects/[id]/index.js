@@ -55,6 +55,25 @@ function earliestDeadline(deadlines) {
   return deadlines.reduce((acc, d) => (acc === '' || d.date < acc ? d.date : acc), '');
 }
 
+// Unieke sleutel per deadline ("YYYY-MM-DD|omschrijving"), gebruikt om afgevinkte
+// deadlines bij te houden in project.dismissed_deadlines.
+function deadlineKey(date, description) {
+  return `${String(date || '').trim()}|${String(description || '').trim()}`;
+}
+
+function normalizeDismissedDeadlines(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const k of input) {
+    const key = String(k || '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
 function normalizeTeam(input) {
   if (!Array.isArray(input)) return [];
   const seen = new Set();
@@ -162,6 +181,7 @@ async function buildDetail(project) {
     module: mods[0] || '',
     deadlines: normalizeDeadlines(project.deadlines, project.deadline),
     deadline: earliestDeadline(normalizeDeadlines(project.deadlines, project.deadline)),
+    dismissed_deadlines: normalizeDismissedDeadlines(project.dismissed_deadlines),
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
     is_hourly_billing: !!project.is_hourly_billing,
@@ -261,6 +281,20 @@ export default async function handler(req, res) {
       }
       project.notes = notes.filter((n) => n.id !== id);
       logActivity(project, user, 'note_deleted', { note_id: id });
+      await saveProject(project);
+      res.status(200).json({ project: await buildDetail(project) });
+      return;
+    }
+
+    if (b.dismiss_deadline) {
+      const date = String(b.dismiss_deadline.date || '').trim();
+      if (!isIsoDate(date)) { res.status(400).json({ error: 'Ongeldige deadline-datum' }); return; }
+      const key = deadlineKey(date, b.dismiss_deadline.description);
+      const dismissed = !!b.dismiss_deadline.dismissed;
+      const cur = normalizeDismissedDeadlines(project.dismissed_deadlines);
+      const next = dismissed ? [...new Set([...cur, key])] : cur.filter((k) => k !== key);
+      project.dismissed_deadlines = next;
+      logActivity(project, user, dismissed ? 'deadline_dismissed' : 'deadline_restored', { deadline: key });
       await saveProject(project);
       res.status(200).json({ project: await buildDetail(project) });
       return;

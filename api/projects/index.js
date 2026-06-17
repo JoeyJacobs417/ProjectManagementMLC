@@ -144,6 +144,7 @@ function enrichWithStats(project, entries) {
     module: mods[0] || '',
     deadlines: normalizeDeadlines(project.deadlines, project.deadline),
     deadline: earliestDeadline(normalizeDeadlines(project.deadlines, project.deadline)),
+    dismissed_deadlines: Array.isArray(project.dismissed_deadlines) ? project.dismissed_deadlines : [],
     start_date: project.start_date || '',
     is_poc: !!project.is_poc,
     is_hourly_billing: !!project.is_hourly_billing,
