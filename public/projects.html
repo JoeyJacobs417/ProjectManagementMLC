@@ -204,7 +204,7 @@
                 <td>${modulesCell(p.modules)}</td>
                 <td>${escapeHtml(p.manager_name || '—')}</td>
                 <td>${teamCell(p.team)}</td>
-                <td>${p.is_hourly_billing ? `${p.hours_used.toFixed(1)} u <span class="subtle">(uurtje-factuurtje)</span>` : `${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u`}</td>
+                <td>${p.is_hourly_billing ? `<span class="subtle">uurtje-factuurtje</span>` : `${p.hours_used.toFixed(1)} / ${(p.available_hours || 0).toFixed(1)} u`}</td>
                 <td>${p.is_hourly_billing ? '<span class="subtle">N/A</span>' : `<span class="badge ${percentageBadgeClass(p.percentage_used)}">${p.percentage_used}%</span>`}</td>
                 <td style="text-align:center">${pdfCell}</td>
               </tr>`;
