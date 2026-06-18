@@ -213,7 +213,15 @@
       .map(([, v]) => ({ name: v.name, plannedHours: v.hours }))
       .sort((a, b) => b.plannedHours - a.plannedHours);
 
-    return { planned, actual, diff: actual - planned, breakdown, missed };
+    // "matched" = uren die op het geplande project/categorie zijn terechtgekomen
+    // (overlap tussen planning en werkelijkheid per project). Basis voor de verdelingsafwijking.
+    let matched = 0;
+    for (const [key, pv] of plannedByKey) {
+      const av = actualByKey.get(key);
+      if (av) matched += Math.min(pv.hours, av.hours);
+    }
+
+    return { planned, actual, diff: actual - planned, breakdown, missed, matched };
   }
 
   let employees = [];
@@ -340,6 +348,34 @@
     return `Samengevat ging van de ${fmtH(r.actual)} u geschreven uren ${joinNl(parts)}.`;
   }
 
+  // Berekent twee afwijkingen t.o.v. de planning en neemt de grootste als eindoordeel:
+  //  - totaal: verschil in totaal aantal uren  = |werkelijk − gepland| / max(gepland, werkelijk)
+  //  - verdeling: uren die niet op het geplande project terechtkwamen = (gepland − matched) / gepland
+  function deviationStats(r) {
+    if (!(r.planned > 0)) return null;
+    const denom = Math.max(r.planned, r.actual);
+    const total = denom > 0 ? Math.abs(r.actual - r.planned) / denom * 100 : 0;
+    const comp = Math.max(0, (r.planned - (r.matched || 0)) / r.planned * 100);
+    return { total, comp, combined: Math.max(total, comp) };
+  }
+
+  // Waardeoordeel over de omvang van de afwijking t.o.v. de planning.
+  // Richtlijn: < 10% = prima, 10–40% = noemenswaardig, > 40% = extreem.
+  function deviationVerdict(r) {
+    const d = deviationStats(r);
+    if (!d) return '';
+    const combined = Math.round(d.combined);
+    if (d.combined < 10) {
+      return `De afwijking ten opzichte van de planning is klein (${combined}%) — dat is prima.`;
+    }
+    const level = d.combined > 40 ? 'extreem' : 'noemenswaardig';
+    const causes = [];
+    if (d.total >= 10) causes.push(`${Math.round(d.total)}% in het totaal aantal uren`);
+    if (d.comp >= 10) causes.push(`${Math.round(d.comp)}% in de verdeling over projecten`);
+    const cause = causes.length ? joinNl(causes) : `${combined}%`;
+    return `De afwijking ten opzichte van de planning is ${level}: ${cause}.`;
+  }
+
   // Afwijkingen kleiner dan dit aantal uren zijn geen probleem en worden genegeerd.
   const NOISE_HOURS = 2;
 
@@ -369,7 +405,6 @@
     const bigMissed = missed
       .filter((m) => m.plannedHours >= NOISE_HOURS)
       .sort((a, b) => b.plannedHours - a.plannedHours);
-    const diffBig = Math.abs(diff) >= NOISE_HOURS;
 
     const sentences = [];
 
@@ -399,8 +434,10 @@
       sentences.push(`Niet opgepakt: ${listMissed(top)}${extra}.`);
     }
 
-    // Slotzin — samenvatting van het resultaat.
+    // Slotzin — samenvatting van het resultaat + waardeoordeel over de afwijking.
     if (summary) sentences.push(summary);
+    const verdict = deviationVerdict(r);
+    if (verdict) sentences.push(verdict);
 
     return sentences.slice(0, 5).join(' ');
   }
@@ -853,6 +890,9 @@
         'Gepland (u)': Math.round(r.planned * 10) / 10,
         'Werkelijk (u)': Math.round(r.actual * 10) / 10,
         'Verschil (u)': Math.round(r.diff * 10) / 10,
+        'Afwijking % (totaal)': deviationStats(r) ? Math.round(deviationStats(r).total) : '',
+        'Afwijking % (verdeling)': deviationStats(r) ? Math.round(deviationStats(r).comp) : '',
+        'Afwijking % (oordeel)': deviationStats(r) ? Math.round(deviationStats(r).combined) : '',
         'Analyse': planVsActualText(r),
       });
     }
