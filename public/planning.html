@@ -150,10 +150,20 @@
     render();
   }
 
+  // Projecten waarvan de naam met "indirect" begint worden samengebundeld; projecten die
+  // met "support" beginnen tellen als ontwikkeling van het SaaS-platform. De categorie-sleutel
+  // wordt zowel op de planning als op de werkelijkheid toegepast, zodat de matching klopt.
+  function categorize(name) {
+    const n = String(name || '').trim().toLowerCase();
+    if (n.startsWith('indirect')) return { key: 'cat:indirect', label: 'Indirect' };
+    if (n.startsWith('support')) return { key: 'cat:saas', label: 'Ontwikkeling SaaS-platform' };
+    return null;
+  }
+
   // Gepland totaal (uit weekly_allocations van de vorige week) vs. werkelijk totaal
-  // (uit Moneybird time entries) voor één medewerker, met uitsplitsing per project.
+  // (uit Moneybird time entries) voor één medewerker, met uitsplitsing per project/categorie.
   function planVsActualFor(empId) {
-    const plannedByKey = new Map();   // project-key -> { name, hours }
+    const plannedByKey = new Map();   // key -> { name, hours }
     let planned = 0;
     for (const p of projects) {
       for (const a of (p.weekly_allocations || [])) {
@@ -161,14 +171,15 @@
         const h = Number(a.hours) || 0;
         if (h <= 0) continue;
         planned += h;
-        const key = p.moneybird_project_id ? `mb:${p.moneybird_project_id}` : `local:${p.id}`;
-        const cur = plannedByKey.get(key) || { name: p.name, hours: 0 };
+        const cat = categorize(p.name);
+        const key = cat ? cat.key : (p.moneybird_project_id ? `mb:${p.moneybird_project_id}` : `local:${p.id}`);
+        const cur = plannedByKey.get(key) || { name: cat ? cat.label : p.name, hours: 0 };
         cur.hours += h;
         plannedByKey.set(key, cur);
       }
     }
 
-    const actualByKey = new Map();    // project-key -> { name, hours, mbId }
+    const actualByKey = new Map();    // key -> { name, hours, mbId, category }
     let actual = 0;
     for (const e of actualEntries) {
       if (String(e.user_moneybird_id || '') !== String(empId)) continue;
@@ -178,10 +189,11 @@
       if (h <= 0) continue;
       actual += h;
       const mbId = e.moneybird_project_id ? String(e.moneybird_project_id) : null;
-      const key = mbId ? `mb:${mbId}` : '__none__';
-      const name = (mbId && trackedByMbId.has(mbId) ? trackedByMbId.get(mbId).name : null)
+      const baseName = (mbId && trackedByMbId.has(mbId) ? trackedByMbId.get(mbId).name : null)
         || e.moneybird_project_name || '(geen project)';
-      const cur = actualByKey.get(key) || { name, hours: 0, mbId };
+      const cat = categorize(baseName);
+      const key = cat ? cat.key : (mbId ? `mb:${mbId}` : '__none__');
+      const cur = actualByKey.get(key) || { name: cat ? cat.label : baseName, hours: 0, mbId, category: cat ? cat.key : null };
       cur.hours += h;
       actualByKey.set(key, cur);
     }
@@ -192,9 +204,10 @@
       tracked: v.mbId ? trackedByMbId.has(v.mbId) : false,
       wasPlanned: (plannedByKey.get(key)?.hours || 0) > 0,
       plannedHours: plannedByKey.get(key)?.hours || 0,
+      category: v.category || null,
     })).sort((a, b) => b.hours - a.hours);
 
-    // Geplande projecten waarop niets is geschreven (volledig gemist).
+    // Geplande projecten/categorieën waarop niets is geschreven (volledig gemist).
     const missed = Array.from(plannedByKey.entries())
       .filter(([key]) => !actualByKey.has(key))
       .map(([, v]) => ({ name: v.name, plannedHours: v.hours }))
@@ -308,12 +321,32 @@
   function listMissed(arr) {
     return arr.map((m) => `${m.name} (${fmtH(m.plannedHours)} u)`).join(', ');
   }
+  function joinNl(arr) {
+    if (arr.length <= 1) return arr.join('');
+    return arr.slice(0, -1).join(', ') + ' en ' + arr[arr.length - 1];
+  }
+
+  // Samenvattende slotzin: verdeelt de werkelijk geschreven uren over projecten,
+  // SaaS-ontwikkeling (support) en indirecte uren (gebundeld).
+  function summaryClause(r) {
+    const indirectHours = r.breakdown.filter((b) => b.category === 'cat:indirect').reduce((s, b) => s + b.hours, 0);
+    const saasHours = r.breakdown.filter((b) => b.category === 'cat:saas').reduce((s, b) => s + b.hours, 0);
+    const projectHours = Math.max(0, r.actual - indirectHours - saasHours);
+    const parts = [];
+    if (projectHours >= 0.05) parts.push(`${fmtH(projectHours)} u naar projecten`);
+    if (saasHours >= 0.05) parts.push(`${fmtH(saasHours)} u naar ontwikkeling van het SaaS-platform`);
+    if (indirectHours >= 0.05) parts.push(`${fmtH(indirectHours)} u naar indirecte uren`);
+    if (parts.length === 0) return '';
+    return `Samengevat ging van de ${fmtH(r.actual)} u geschreven uren ${joinNl(parts)}.`;
+  }
 
   // Afwijkingen kleiner dan dit aantal uren zijn geen probleem en worden genegeerd.
   const NOISE_HOURS = 2;
 
-  // Bouwt een korte Nederlandse analyse (max 3 zinnen) van planning vs. praktijk.
-  // Alleen noemenswaardige afwijkingen (≥ NOISE_HOURS uur) worden benoemd.
+  // Bouwt een korte Nederlandse analyse (max 5 zinnen) van planning vs. praktijk,
+  // afgesloten met een samenvattende slotzin. Alleen noemenswaardige afwijkingen
+  // (≥ NOISE_HOURS uur) worden benoemd; indirect/support-uren worden niet als weglek
+  // gerekend maar in de samenvatting verwerkt.
   function planVsActualText(r) {
     const { planned, actual, diff, breakdown, missed } = r;
     if (planned === 0 && actual === 0) {
@@ -322,32 +355,33 @@
     if (actual === 0) {
       return `Er was ${fmtH(planned)} u ingepland, maar er zijn deze week geen uren geschreven.`;
     }
+
+    const summary = summaryClause(r);
+
     if (planned === 0) {
-      return `Er was niets ingepland, maar er is ${fmtH(actual)} u geschreven.`;
+      return [`Er was niets ingepland, maar er is ${fmtH(actual)} u geschreven.`, summary].filter(Boolean).join(' ');
     }
 
+    // Weglek = niet-ingepland, echt project (geen indirect/support-categorie), ≥ drempel.
     const leaks = breakdown
-      .filter((b) => !b.wasPlanned && b.hours >= NOISE_HOURS)
+      .filter((b) => !b.wasPlanned && !b.category && b.hours >= NOISE_HOURS)
       .sort((a, b) => b.hours - a.hours);
     const bigMissed = missed
       .filter((m) => m.plannedHours >= NOISE_HOURS)
       .sort((a, b) => b.plannedHours - a.plannedHours);
     const diffBig = Math.abs(diff) >= NOISE_HOURS;
 
-    // Geen noemenswaardige afwijkingen: één korte zin, geen projectopsomming.
-    if (!diffBig && leaks.length === 0 && bigMissed.length === 0) {
-      return `Planning en praktijk komen overeen (${fmtH(planned)} u ingepland, ${fmtH(actual)} u geschreven).`;
-    }
-
     const sentences = [];
 
-    // Zin 1 — totaal, alleen als het verschil noemenswaardig is.
+    // Zin 1 — totaalvergelijking.
     if (diff <= -NOISE_HOURS) {
       sentences.push(`Er is ${fmtH(-diff)} u minder gewerkt dan ingepland (${fmtH(planned)} u gepland, ${fmtH(actual)} u geschreven).`);
     } else if (diff >= NOISE_HOURS) {
       sentences.push(`Er is ${fmtH(diff)} u meer gewerkt dan ingepland (${fmtH(planned)} u gepland, ${fmtH(actual)} u geschreven).`);
-    } else {
+    } else if (leaks.length || bigMissed.length) {
       sentences.push(`Het totaal klopt (${fmtH(planned)} u ingepland, ${fmtH(actual)} u geschreven), maar de verdeling wijkt af.`);
+    } else {
+      sentences.push(`Planning en praktijk komen overeen (${fmtH(planned)} u ingepland, ${fmtH(actual)} u geschreven).`);
     }
 
     // Zin 2 — waar ging de tijd heen (alleen noemenswaardige weglek).
@@ -365,7 +399,10 @@
       sentences.push(`Niet opgepakt: ${listMissed(top)}${extra}.`);
     }
 
-    return sentences.slice(0, 3).join(' ');
+    // Slotzin — samenvatting van het resultaat.
+    if (summary) sentences.push(summary);
+
+    return sentences.slice(0, 5).join(' ');
   }
 
   function planVsActualSection(shown) {
