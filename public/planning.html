@@ -297,47 +297,77 @@
     } catch (err) { toast(err.message, 'error'); }
   }
 
+  // Formatteer uren netjes: 1 decimaal, hele getallen zonder ',0'.
+  function fmtH(n) {
+    const v = Math.round((Number(n) || 0) * 10) / 10;
+    return Number.isInteger(v) ? String(v) : v.toFixed(1).replace('.', ',');
+  }
+  function listProjHours(arr) {
+    return arr.map((b) => `${b.name} (${fmtH(b.hours)} u)`).join(', ');
+  }
+  function listMissed(arr) {
+    return arr.map((m) => `${m.name} (${fmtH(m.plannedHours)} u)`).join(', ');
+  }
+
+  // Bouwt een uitgeschreven Nederlandse analyse (max 3 zinnen) van planning vs. praktijk.
+  function planVsActualText(r) {
+    const { planned, actual, diff, breakdown, missed } = r;
+    if (planned === 0 && actual === 0) {
+      return 'Geen uren ingepland en geen uren geschreven deze week.';
+    }
+    if (planned === 0) {
+      return `Er was niets ingepland deze week, maar er is ${fmtH(actual)} u geschreven op ${listProjHours(breakdown)}.`;
+    }
+    if (actual === 0) {
+      return `Er was ${fmtH(planned)} u ingepland op ${listMissed(missed)}, maar er zijn deze week geen uren geschreven.`;
+    }
+
+    const deviating = breakdown.filter((b) => !b.wasPlanned).sort((a, b) => b.hours - a.hours);
+    const untracked = deviating.filter((b) => !b.tracked);
+    const plannedHit = breakdown.filter((b) => b.wasPlanned);
+    const within = Math.abs(diff) <= 0.5;
+    const sentences = [];
+
+    // Zin 1 — totaalvergelijking.
+    if (within && (deviating.length || missed.length)) {
+      sentences.push(`Het totaal klopt (${fmtH(planned)} u ingepland, ${fmtH(actual)} u geschreven), maar de uren zijn anders verdeeld dan gepland.`);
+    } else if (within) {
+      sentences.push(`Planning en praktijk komen goed overeen: ${fmtH(planned)} u ingepland en ${fmtH(actual)} u geschreven.`);
+    } else if (diff < 0) {
+      sentences.push(`Er is minder gewerkt dan ingepland: ${fmtH(planned)} u gepland tegenover ${fmtH(actual)} u werkelijk (${fmtH(diff)} u).`);
+    } else {
+      sentences.push(`Er is meer gewerkt dan ingepland: ${fmtH(planned)} u gepland tegenover ${fmtH(actual)} u werkelijk (+${fmtH(diff)} u).`);
+    }
+
+    // Zin 2 — waar gingen de uren werkelijk naartoe (afwijkingen)?
+    if (deviating.length) {
+      let note = '';
+      if (untracked.length === deviating.length) {
+        note = untracked.length === 1 ? ' — dit project staat niet in de tool' : ' — deze projecten staan niet in de tool';
+      } else if (untracked.length) {
+        note = ` (waarvan ${untracked.map((b) => b.name).join(', ')} niet in de tool staat)`;
+      }
+      sentences.push(`Een deel van de tijd ging naar niet-ingepland werk: ${listProjHours(deviating)}${note}.`);
+    } else if (plannedHit.length && !missed.length) {
+      sentences.push(`Alle uren zijn besteed aan het ingeplande werk: ${listProjHours(plannedHit)}.`);
+    }
+
+    // Zin 3 — ingepland werk waarop niets is geschreven.
+    if (missed.length) {
+      sentences.push(`Op ingepland werk is geen tijd geschreven: ${listMissed(missed)}.`);
+    }
+
+    return sentences.slice(0, 3).join(' ');
+  }
+
   function planVsActualSection(shown) {
     if (shown.length === 0) return '';
-    const fmtDiff = (d) => `${d > 0 ? '+' : ''}${d.toFixed(1)} u`;
-    const rows = shown.map((e) => {
+    const blocks = shown.map((e) => {
       const r = planVsActualFor(e.id);
-      if (r.planned === 0 && r.actual === 0) {
-        return `<tr>
-          <td><strong>${escapeHtml(e.name)}</strong></td>
-          <td><span class="subtle">—</span></td>
-          <td><span class="subtle">—</span></td>
-          <td><span class="subtle">—</span></td>
-          <td><span class="subtle">geen planning en geen uren deze week</span></td>
-        </tr>`;
-      }
-      // Verschil-kleur: binnen 0.5u = op schema (groen), minder gewerkt = oranje, meer = blauw.
-      const within = Math.abs(r.diff) <= 0.5;
-      const diffBadge = within
-        ? `<span class="badge badge-green">op schema</span>`
-        : `<span class="badge ${r.diff < 0 ? 'badge-orange' : 'badge-blue'}">${fmtDiff(r.diff)}</span>`;
-
-      const badges = r.breakdown.map((b) => {
-        const cls = b.wasPlanned ? 'badge-green' : (b.tracked ? 'badge-orange' : 'badge-purple');
-        const tip = b.wasPlanned
-          ? `Gepland: ${b.plannedHours.toFixed(1)} u`
-          : (b.tracked ? 'Niet gepland deze week (ander project in de tool)' : 'Ongekoppeld Moneybird-project (niet in de tool)');
-        return `<span class="badge ${cls}" title="${escapeHtml(tip)}" style="margin:0 .25rem .25rem 0; display:inline-block">${escapeHtml(b.name)}: ${b.hours.toFixed(1)} u</span>`;
-      }).join('');
-      const missedHtml = r.missed.length
-        ? `<div class="subtle" style="margin-top:.25rem; font-size:.8rem">Gepland maar niets geschreven: ${r.missed.map((m) => `${escapeHtml(m.name)} (${m.plannedHours.toFixed(1)} u)`).join(', ')}</div>`
-        : '';
-      const breakdownCell = r.breakdown.length
-        ? badges + missedHtml
-        : `<span class="subtle">geen uren geschreven</span>` + missedHtml;
-
-      return `<tr>
-        <td><strong>${escapeHtml(e.name)}</strong></td>
-        <td>${r.planned > 0 ? r.planned.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>
-        <td>${r.actual > 0 ? r.actual.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>
-        <td>${diffBadge}</td>
-        <td>${breakdownCell}</td>
-      </tr>`;
+      return `<div style="margin:0 0 .85rem">
+        <strong>${escapeHtml(e.name)}</strong><br>
+        <span>${escapeHtml(planVsActualText(r))}</span>
+      </div>`;
     }).join('');
 
     const coverageWarn = (actualLoadFailed || (actualCoverageSince && actualCoverageSince > prevWeekMondayIso))
@@ -349,11 +379,8 @@
     return `
       <div class="card-static" style="margin-bottom:1.5rem">
         <h2 style="margin:0 0 .25rem">Planning vs. werkelijkheid — week van ${fmtDate(prevWeekMondayIso)} t/m ${fmtDate(prevWeekSundayIso)}</h2>
-        <p class="subtle" style="margin:0 0 .75rem; font-size:.85rem">Geplande uren (uit de inplanning) naast de werkelijk geschreven uren uit Moneybird voor de afgelopen week. De laatste kolom laat zien waar de uren werkelijk naartoe gingen: <span class="badge badge-green">gepland project</span> <span class="badge badge-orange">ander project in de tool</span> <span class="badge badge-purple">ongekoppeld Moneybird-project</span>.</p>
-        <table class="table" style="margin:0">
-          <thead><tr><th>Medewerker</th><th>Gepland</th><th>Werkelijk</th><th>Verschil</th><th>Werkelijke uren per project</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+        <p class="subtle" style="margin:0 0 .75rem; font-size:.85rem">Korte analyse per medewerker van de ingeplande uren naast de werkelijk in Moneybird geschreven uren van de afgelopen week.</p>
+        ${blocks}
         ${coverageWarn}
       </div>`;
   }
@@ -781,8 +808,7 @@
         'Gepland (u)': Math.round(r.planned * 10) / 10,
         'Werkelijk (u)': Math.round(r.actual * 10) / 10,
         'Verschil (u)': Math.round(r.diff * 10) / 10,
-        'Werkelijk per project': r.breakdown.map((b) => `${b.name}: ${b.hours.toFixed(1)}u${b.wasPlanned ? '' : b.tracked ? ' (niet gepland)' : ' (ongekoppeld)'}`).join('; '),
-        'Gepland maar niet geschreven': r.missed.map((m) => `${m.name} (${m.plannedHours.toFixed(1)}u)`).join('; '),
+        'Analyse': planVsActualText(r),
       });
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pvaRows), 'Plan vs werkelijk');
