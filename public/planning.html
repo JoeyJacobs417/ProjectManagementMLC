@@ -109,12 +109,28 @@
   let dashboardEmps = new Set();
   let planningEmps = new Set();
 
+  // ─ Planning vs. werkelijkheid (vorige week) ─
+  let actualEntries = [];                 // werkelijke time entries (incl. ongekoppelde Moneybird-projecten)
+  let trackedByMbId = new Map();          // moneybird_project_id -> project (gekoppelde projecten)
+  let prevWeekMondayIso = '';             // maandag van de vorige (afgeronde) week
+  let prevWeekSundayIso = '';             // zondag van de vorige week
+  let actualCoverageSince = null;         // oudste datum die de bulk-cache dekt
+  let actualLoadFailed = false;
+
   async function loadAllData() {
     document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
 
-    const [projResp, settingsResp] = await Promise.all([
+    // Bereken het venster van de vorige (afgeronde) week: maandag t/m zondag.
+    const thisMon = mondayOf(new Date());
+    const prevMon = new Date(thisMon); prevMon.setDate(prevMon.getDate() - 7);
+    const prevSun = new Date(prevMon); prevSun.setDate(prevSun.getDate() + 6);
+    prevWeekMondayIso = dateToIso(prevMon);
+    prevWeekSundayIso = dateToIso(prevSun);
+
+    const [projResp, settingsResp, actualResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
       apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [], planning_employees: [] } })),
+      apiGet(`/api/moneybird/time_entries?since=${prevWeekMondayIso}`).catch(() => { actualLoadFailed = true; return { time_entries: [] }; }),
     ]);
 
     projects = projResp.projects;
@@ -124,8 +140,67 @@
     dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
     planningEmps = new Set(settingsResp.settings.planning_employees || []);
 
+    actualEntries = Array.isArray(actualResp.time_entries) ? actualResp.time_entries : [];
+    actualCoverageSince = actualResp.coverage_since || null;
+    trackedByMbId = new Map(
+      projects.filter((p) => p.moneybird_project_id).map((p) => [String(p.moneybird_project_id), p])
+    );
+
     rebuildEmployees();
     render();
+  }
+
+  // Gepland totaal (uit weekly_allocations van de vorige week) vs. werkelijk totaal
+  // (uit Moneybird time entries) voor één medewerker, met uitsplitsing per project.
+  function planVsActualFor(empId) {
+    const plannedByKey = new Map();   // project-key -> { name, hours }
+    let planned = 0;
+    for (const p of projects) {
+      for (const a of (p.weekly_allocations || [])) {
+        if (a.moneybird_user_id !== empId || a.week_start !== prevWeekMondayIso) continue;
+        const h = Number(a.hours) || 0;
+        if (h <= 0) continue;
+        planned += h;
+        const key = p.moneybird_project_id ? `mb:${p.moneybird_project_id}` : `local:${p.id}`;
+        const cur = plannedByKey.get(key) || { name: p.name, hours: 0 };
+        cur.hours += h;
+        plannedByKey.set(key, cur);
+      }
+    }
+
+    const actualByKey = new Map();    // project-key -> { name, hours, mbId }
+    let actual = 0;
+    for (const e of actualEntries) {
+      if (String(e.user_moneybird_id || '') !== String(empId)) continue;
+      const day = String(e.started_at || '').slice(0, 10);
+      if (day < prevWeekMondayIso || day > prevWeekSundayIso) continue;
+      const h = Number(e.hours) || 0;
+      if (h <= 0) continue;
+      actual += h;
+      const mbId = e.moneybird_project_id ? String(e.moneybird_project_id) : null;
+      const key = mbId ? `mb:${mbId}` : '__none__';
+      const name = (mbId && trackedByMbId.has(mbId) ? trackedByMbId.get(mbId).name : null)
+        || e.moneybird_project_name || '(geen project)';
+      const cur = actualByKey.get(key) || { name, hours: 0, mbId };
+      cur.hours += h;
+      actualByKey.set(key, cur);
+    }
+
+    const breakdown = Array.from(actualByKey.entries()).map(([key, v]) => ({
+      name: v.name,
+      hours: v.hours,
+      tracked: v.mbId ? trackedByMbId.has(v.mbId) : false,
+      wasPlanned: (plannedByKey.get(key)?.hours || 0) > 0,
+      plannedHours: plannedByKey.get(key)?.hours || 0,
+    })).sort((a, b) => b.hours - a.hours);
+
+    // Geplande projecten waarop niets is geschreven (volledig gemist).
+    const missed = Array.from(plannedByKey.entries())
+      .filter(([key]) => !actualByKey.has(key))
+      .map(([, v]) => ({ name: v.name, plannedHours: v.hours }))
+      .sort((a, b) => b.plannedHours - a.plannedHours);
+
+    return { planned, actual, diff: actual - planned, breakdown, missed };
   }
 
   let employees = [];
@@ -222,6 +297,67 @@
     } catch (err) { toast(err.message, 'error'); }
   }
 
+  function planVsActualSection(shown) {
+    if (shown.length === 0) return '';
+    const fmtDiff = (d) => `${d > 0 ? '+' : ''}${d.toFixed(1)} u`;
+    const rows = shown.map((e) => {
+      const r = planVsActualFor(e.id);
+      if (r.planned === 0 && r.actual === 0) {
+        return `<tr>
+          <td><strong>${escapeHtml(e.name)}</strong></td>
+          <td><span class="subtle">—</span></td>
+          <td><span class="subtle">—</span></td>
+          <td><span class="subtle">—</span></td>
+          <td><span class="subtle">geen planning en geen uren deze week</span></td>
+        </tr>`;
+      }
+      // Verschil-kleur: binnen 0.5u = op schema (groen), minder gewerkt = oranje, meer = blauw.
+      const within = Math.abs(r.diff) <= 0.5;
+      const diffBadge = within
+        ? `<span class="badge badge-green">op schema</span>`
+        : `<span class="badge ${r.diff < 0 ? 'badge-orange' : 'badge-blue'}">${fmtDiff(r.diff)}</span>`;
+
+      const badges = r.breakdown.map((b) => {
+        const cls = b.wasPlanned ? 'badge-green' : (b.tracked ? 'badge-orange' : 'badge-purple');
+        const tip = b.wasPlanned
+          ? `Gepland: ${b.plannedHours.toFixed(1)} u`
+          : (b.tracked ? 'Niet gepland deze week (ander project in de tool)' : 'Ongekoppeld Moneybird-project (niet in de tool)');
+        return `<span class="badge ${cls}" title="${escapeHtml(tip)}" style="margin:0 .25rem .25rem 0; display:inline-block">${escapeHtml(b.name)}: ${b.hours.toFixed(1)} u</span>`;
+      }).join('');
+      const missedHtml = r.missed.length
+        ? `<div class="subtle" style="margin-top:.25rem; font-size:.8rem">Gepland maar niets geschreven: ${r.missed.map((m) => `${escapeHtml(m.name)} (${m.plannedHours.toFixed(1)} u)`).join(', ')}</div>`
+        : '';
+      const breakdownCell = r.breakdown.length
+        ? badges + missedHtml
+        : `<span class="subtle">geen uren geschreven</span>` + missedHtml;
+
+      return `<tr>
+        <td><strong>${escapeHtml(e.name)}</strong></td>
+        <td>${r.planned > 0 ? r.planned.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>
+        <td>${r.actual > 0 ? r.actual.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>
+        <td>${diffBadge}</td>
+        <td>${breakdownCell}</td>
+      </tr>`;
+    }).join('');
+
+    const coverageWarn = (actualLoadFailed || (actualCoverageSince && actualCoverageSince > prevWeekMondayIso))
+      ? `<p style="color:#b45309; font-weight:600; margin:.5rem 0 0; font-size:.85rem">⚠ ${actualLoadFailed
+          ? 'De werkelijke uren konden niet worden geladen.'
+          : 'De Moneybird-cache dekt nog niet de volledige vorige week, dus de werkelijke uren kunnen onvolledig zijn.'} Open een medewerker en gebruik "Haal volledige Moneybird-uren op" om de cache aan te vullen.</p>`
+      : '';
+
+    return `
+      <div class="card-static" style="margin-bottom:1.5rem">
+        <h2 style="margin:0 0 .25rem">Planning vs. werkelijkheid — week van ${fmtDate(prevWeekMondayIso)} t/m ${fmtDate(prevWeekSundayIso)}</h2>
+        <p class="subtle" style="margin:0 0 .75rem; font-size:.85rem">Geplande uren (uit de inplanning) naast de werkelijk geschreven uren uit Moneybird voor de afgelopen week. De laatste kolom laat zien waar de uren werkelijk naartoe gingen: <span class="badge badge-green">gepland project</span> <span class="badge badge-orange">ander project in de tool</span> <span class="badge badge-purple">ongekoppeld Moneybird-project</span>.</p>
+        <table class="table" style="margin:0">
+          <thead><tr><th>Medewerker</th><th>Gepland</th><th>Werkelijk</th><th>Verschil</th><th>Werkelijke uren per project</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${coverageWarn}
+      </div>`;
+  }
+
   function render() {
     const empFilter = document.getElementById('empFilter');
     const value = empFilter.value;
@@ -242,7 +378,7 @@
     }
 
     const today = todayIso();
-    c.innerHTML = shown.map((e) => {
+    c.innerHTML = planVsActualSection(shown) + shown.map((e) => {
       const order = { in_progress: 0, recurring: 1, future: 2, on_hold: 3 };
       const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
       const cap = Number(capacities[e.id]) || 0;
@@ -634,6 +770,22 @@
       }
     }
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weeklyRows), 'Weekly');
+
+    const pvaRows = [];
+    for (const e of employees) {
+      const r = planVsActualFor(e.id);
+      if (r.planned === 0 && r.actual === 0) continue;
+      pvaRows.push({
+        'Medewerker': e.name,
+        'Week (ma)': prevWeekMondayIso,
+        'Gepland (u)': Math.round(r.planned * 10) / 10,
+        'Werkelijk (u)': Math.round(r.actual * 10) / 10,
+        'Verschil (u)': Math.round(r.diff * 10) / 10,
+        'Werkelijk per project': r.breakdown.map((b) => `${b.name}: ${b.hours.toFixed(1)}u${b.wasPlanned ? '' : b.tracked ? ' (niet gepland)' : ' (ongekoppeld)'}`).join('; '),
+        'Gepland maar niet geschreven': r.missed.map((m) => `${m.name} (${m.plannedHours.toFixed(1)}u)`).join('; '),
+      });
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pvaRows), 'Plan vs werkelijk');
 
     XLSX.writeFile(wb, `planning-${new Date().toISOString().slice(0,10)}.xlsx`);
     toast('Excel gedownload', 'success');
