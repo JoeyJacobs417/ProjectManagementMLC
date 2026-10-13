@@ -116,6 +116,7 @@
   let prevWeekSundayIso = '';             // zondag van de vorige week
   let actualCoverageSince = null;         // oudste datum die de bulk-cache dekt
   let actualLoadFailed = false;
+  let breakdownSinceIso = '';             // begin van het venster voor de wekelijkse breakdown
 
   async function loadAllData() {
     document.getElementById('content').innerHTML = '<p class="subtle">Laden…</p>';
@@ -127,9 +128,13 @@
     prevWeekMondayIso = dateToIso(prevMon);
     prevWeekSundayIso = dateToIso(prevSun);
 
-    const [projResp, settingsResp] = await Promise.all([
+    const breakdownStart = new Date(thisMon); breakdownStart.setDate(breakdownStart.getDate() - 7 * (WEEKS_BACK - 1));
+    breakdownSinceIso = dateToIso(breakdownStart);
+
+    const [projResp, settingsResp, actualResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
       apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [], planning_employees: [] } })),
+          apiGet(`/api/moneybird/time_entries?since=${breakdownSinceIso}`).catch(() => { actualLoadFailed = true; return { time_entries: [] }; }),
     ]);
 
     projects = projResp.projects;
@@ -138,6 +143,9 @@
     overigByEmp = settingsResp.settings.employee_overig || {};
     dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
     planningEmps = new Set(settingsResp.settings.planning_employees || []);
+
+    actualEntries = Array.isArray(actualResp.time_entries) ? actualResp.time_entries : [];
+    actualCoverageSince = actualResp.coverage_since || null;
 
     trackedByMbId = new Map(
       projects.filter((p) => p.moneybird_project_id).map((p) => [String(p.moneybird_project_id), p])
@@ -268,13 +276,33 @@
     }
     const weekMap = new Map(weekStarts.map((w) => [w, { perTracked: new Map() }]));
 
-    for (const p of projects) {
-      for (const e of (p.time_entries || [])) {
-        if (e.user_moneybird_id !== empId || !e.started_at) continue;
-        const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0,10))));
-        if (!weekMap.has(monday)) continue;
-        const cur = weekMap.get(monday).perTracked;
-        cur.set(p.id, (cur.get(p.id) || 0) + (Number(e.hours) || 0));
+    // Bron: dezelfde Moneybird-cache als de medewerker-pagina (incl. ongekoppelde projecten).
+    // Terugval op de per-project opslag als de Moneybird-uren niet geladen konden worden.
+    const addHours = (monday, key, name, hours) => {
+      if (!weekMap.has(monday)) return;
+      const cur = weekMap.get(monday).perTracked;
+      const prev = cur.get(key) || { name, hours: 0 };
+      prev.hours += hours;
+      cur.set(key, prev);
+    };
+    if (!actualLoadFailed) {
+      for (const e of actualEntries) {
+        if (String(e.user_moneybird_id || '') !== String(empId) || !e.started_at) continue;
+        const hours = Number(e.hours) || 0;
+        if (hours <= 0) continue;
+        const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0, 10))));
+        const mbId = e.moneybird_project_id ? String(e.moneybird_project_id) : null;
+        const tracked = mbId ? trackedByMbId.get(mbId) : null;
+        const name = (tracked && tracked.name) || e.moneybird_project_name || '(geen project)';
+        addHours(monday, mbId ? `mb:${mbId}` : '__none__', name, hours);
+      }
+    } else {
+      for (const p of projects) {
+        for (const e of (p.time_entries || [])) {
+          if (e.user_moneybird_id !== empId || !e.started_at) continue;
+          const monday = dateToIso(mondayOf(new Date(String(e.started_at).slice(0, 10))));
+          addHours(monday, `p:${p.id}`, p.name, Number(e.hours) || 0);
+        }
       }
     }
 
@@ -283,12 +311,9 @@
       return {
         weekStart: w,
         perProject: Array.from(wd.perTracked.entries())
-          .map(([pid, hours]) => {
-            const pr = projects.find((x) => x.id === pid);
-            return { project_id: pid, project_name: pr ? pr.name : 'Onbekend', hours };
-          })
+          .map(([key, v]) => ({ project_id: key, project_name: v.name, hours: v.hours }))
           .sort((a, b) => b.hours - a.hours),
-        total: Array.from(wd.perTracked.values()).reduce((a, h) => a + h, 0),
+        total: Array.from(wd.perTracked.values()).reduce((a, v) => a + v.hours, 0),
       };
     });
   }
@@ -687,6 +712,9 @@
           })()}
 
           <h4 style="margin-top:1rem">Wekelijkse breakdown (laatste ${WEEKS_BACK} weken)</h4>
+          ${(actualLoadFailed || (actualCoverageSince && actualCoverageSince > breakdownSinceIso))
+            ? `<p style="color:#b45309; font-weight:600; margin:0 0 .5rem; font-size:.85rem">⚠ ${actualLoadFailed ? 'De Moneybird-uren konden niet worden geladen; getoond zijn alleen de uren op gekoppelde projecten.' : 'De Moneybird-cache dekt nog niet alle ' + WEEKS_BACK + ' weken, dus oudere weken kunnen onvolledig zijn.'} Open de medewerker en gebruik "Haal volledige Moneybird-uren op" om de cache aan te vullen.</p>`
+            : ''}
           <table class="table" style="margin:0">
             <thead><tr><th>Week (ma)</th><th>Projecten</th><th>Totaal</th><th>vs. capaciteit</th></tr></thead>
             <tbody>${weeklyRows}</tbody>

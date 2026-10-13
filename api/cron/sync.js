@@ -1,4 +1,4 @@
-// Cron-endpoint: aangeroepen door Vercel Cron (configuratie in vercel.json).
+// Cron-endpoint: aangeroepen door de Coolify Scheduled Task (zie README).
 // Synchroniseert alle gekoppelde projecten en checkt drempels.
 import { syncAllProjects } from '../../lib/sync.js';
 

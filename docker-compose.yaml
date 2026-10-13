@@ -1,0 +1,97 @@
+# docker-compose.yaml — productie-deployment op Coolify.
+#
+# Stack:
+#   app         Express-server (server.js), bouwt uit de Dockerfile
+#   redis       self-hosted Redis met AOF-persistentie
+#   redis-rest  Upstash-compatibele REST-proxy (SRH — hiett/serverless-redis-http)
+#   cron        sidecar die dagelijks de sync aanroept
+#
+# De proxy is nodig omdat de app @upstash/redis gebruikt: dat praat over HTTP/REST,
+# niet over het Redis-protocol. Met de proxy blijft de app-code ongewijzigd.
+#
+# Coolify: maak een "Docker Compose"-resource op deze repo, zet de env-vars uit
+# .env.example in de Coolify-UI (incl. een zelfgekozen REDIS_TOKEN), zet het domein
+# op de `app`-service en schakel HTTPS in.
+#
+# Lokaal: vul .env en draai `docker compose up --build`.
+
+services:
+  app:
+    build: .
+    image: project-manager:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      # Self-hosted Redis via de interne REST-proxy:
+      UPSTASH_REDIS_REST_URL: http://redis-rest:80
+      UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN}
+      # (Nog) bij Upstash in de cloud blijven? Vervang bovenstaande twee regels door:
+      #   UPSTASH_REDIS_REST_URL: ${UPSTASH_REDIS_REST_URL}
+      #   UPSTASH_REDIS_REST_TOKEN: ${UPSTASH_REDIS_REST_TOKEN}
+
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MONEYBIRD_API_TOKEN: ${MONEYBIRD_API_TOKEN}
+      MONEYBIRD_ADMINISTRATION_ID: ${MONEYBIRD_ADMINISTRATION_ID}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL}
+      CRON_SECRET: ${CRON_SECRET}
+    expose:
+      - "3000"
+    depends_on:
+      - redis
+      - redis-rest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF = elke schrijfactie wordt direct weggeschreven; i.c.m. het volume hieronder
+    # overleeft de data een herstart/redeploy. Zonder volume ben je alles kwijt — zie README.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  redis-rest:
+    image: hiett/serverless-redis-http:latest
+    restart: unless-stopped
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: ${REDIS_TOKEN}
+      SRH_CONNECTION_STRING: redis://redis:6379
+    expose:
+      - "80"
+    depends_on:
+      - redis
+
+  # Sidecar: roept dagelijks /api/cron/sync aan, zodat de planning self-contained is
+  # en niet afhankelijk van Coolify's Scheduled Tasks. Gebruikt dezelfde image als
+  # `app` (geen tweede build).
+  cron:
+    image: project-manager:latest
+    restart: unless-stopped
+    command: ["node", "scripts/cron-runner.mjs"]
+    environment:
+      CRON_TARGET: http://app:3000/api/cron/sync
+      CRON_SECRET: ${CRON_SECRET}
+      CRON_HOUR: ${CRON_HOUR:-7}
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  redis-data:

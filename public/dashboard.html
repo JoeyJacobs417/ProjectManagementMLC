@@ -128,7 +128,37 @@
   async function ensureProjectsForMonth(monthIso) {
     if (loadedMonthKey === monthIso && projectsWithEntries) return projectsWithEntries;
     const r = await apiGet(`/api/projects?with_time_entries=1&time_entries_in_month=${encodeURIComponent(monthIso)}`);
-    projectsWithEntries = r.projects;
+    const projectsList = r.projects;
+
+    // De uren per project (dagelijkse sync) kunnen achterlopen of ontbreken. De Moneybird-cache
+    // wordt wel betrouwbaar ververst; die gebruiken we voor de uren in de gekozen maand zolang
+    // de cache die maand volledig dekt. Alleen gekoppelde projecten (met uurtarief) tellen mee,
+    // dus interne uren (Indirect, Marketing, Support) blijven buiten de omzet.
+    try {
+      const monthStart = `${monthIso}-01`;
+      const cacheResp = await apiGet(`/api/moneybird/time_entries?since=${encodeURIComponent(monthStart)}`);
+      const covered = !cacheResp.coverage_since || cacheResp.coverage_since <= monthStart;
+      if (covered && Array.isArray(cacheResp.time_entries)) {
+        const byMb = new Map();
+        for (const e of cacheResp.time_entries) {
+          if (!e.moneybird_project_id || !String(e.started_at || '').startsWith(monthIso)) continue;
+          const k = String(e.moneybird_project_id);
+          if (!byMb.has(k)) byMb.set(k, []);
+          byMb.get(k).push(e);
+        }
+        for (const p of projectsList) {
+          if (!p.moneybird_project_id) continue;
+          const fresh = byMb.get(String(p.moneybird_project_id)) || [];
+          const storedHours = (p.time_entries || []).reduce((a, e) => a + (Number(e.hours) || 0), 0);
+          const freshHours = fresh.reduce((a, e) => a + (Number(e.hours) || 0), 0);
+          // Cache is leidend voor de maand; totaal-verbruik corrigeren met het verschil.
+          p.time_entries = fresh;
+          p.hours_used = Math.max(0, (Number(p.hours_used) || 0) + (freshHours - storedHours));
+        }
+      }
+    } catch (err) { /* cache niet beschikbaar: terugvallen op de opgeslagen uren per project */ }
+
+    projectsWithEntries = projectsList;
     loadedMonthKey = monthIso;
     return projectsWithEntries;
   }
