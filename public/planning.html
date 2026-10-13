@@ -512,11 +512,11 @@
         estimateHtml = '<span class="subtle">niets meer te doen</span>';
       }
 
-      // Komende 4 maandagen (vanaf deze week)
+      // Vorige week + huidige week + komende 3 maandagen
       const todayDate = new Date(); todayDate.setHours(0,0,0,0);
       const thisMon = mondayOf(todayDate);
       const futureWeeks = [];
-      for (let i = 0; i < 4; i++) {
+      for (let i = -1; i < 4; i++) {
         const d = new Date(thisMon); d.setDate(d.getDate() + i * 7);
         futureWeeks.push(dateToIso(d));
       }
@@ -590,7 +590,8 @@
               const overigHrs = Number((overigData[w] || {}).hours) || 0;
               return [w, projectAllocSum.get(w) + vacHrs + overigHrs];
             }));
-            const anyOver = cap > 0 && futureWeeks.some((w) => totalPerWeek.get(w) > cap + 0.01);
+            const currentMonIso = dateToIso(mondayOf(new Date()));
+            const anyOver = cap > 0 && futureWeeks.some((w) => w >= currentMonIso && totalPerWeek.get(w) > cap + 0.01);
 
             const SEP = 'border-left:2px solid #cbd5e1';
             const thisMonIso = dateToIso(mondayOf(new Date()));
@@ -611,7 +612,7 @@
                 : `<td style="${ingeplandOver ? 'color:#b45309;font-weight:600' : ''}">${ingepland > 0 ? ingepland.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>`;
               const allocCells = futureWeeks.map((w, i) => {
                 const h = allocByWeek.get(w) || 0;
-                return `<td style="${i === 0 ? SEP + '; ' : ''}padding:6px 3px"><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
+                return `<td style="${w === thisMonIso ? SEP + '; ' : ''}padding:6px 3px"><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
               }).join('');
               return `
                 <tr${rowStyle}>
@@ -626,7 +627,7 @@
 
             const vacCells = futureWeeks.map((w, i) => {
               const items = vacInfoPerWeek.get(w);
-              const sep = i === 0 ? `style="${SEP}; padding:6px 3px"` : 'style="padding:6px 3px"';
+              const sep = w === thisMonIso ? `style="${SEP}; padding:6px 3px"` : 'style="padding:6px 3px"';
               if (items.length === 0) return `<td ${sep}><span class="subtle">—</span></td>`;
               const hrs = items.length * hoursPerDay;
               const tip = items.map((it) => `${fmtDate(it.iso)}${it.kind === 'holiday' ? ' (feestdag)' : ''}`).join(', ');
@@ -636,7 +637,7 @@
             const totalCells = futureWeeks.map((w, i) => {
               const planned = totalPerWeek.get(w);
               const over = cap > 0 && planned > cap + 0.01;
-              const base = i === 0 ? SEP + '; ' : '';
+              const base = w === thisMonIso ? SEP + '; ' : '';
               const cellStyle = base + 'padding:6px 3px' + (over ? '; color:#b91c1c; background:rgba(239,68,68,.12)' : '');
               if (cap <= 0) return `<td style="${cellStyle}"><strong>${planned.toFixed(1)} u</strong></td>`;
               return `<td style="${cellStyle}"><strong>${planned.toFixed(1)} / ${cap} u</strong></td>`;
@@ -644,12 +645,12 @@
 
             return `
               <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold / Recurring)</h4>
-              <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vier rechterkolommen tonen de uren-toewijzing per week (komende 4 weken vanaf maandag). Klik in een veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en NL-feestdagen en kan niet worden bewerkt.</p>
+              <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vijf rechterkolommen tonen de uren-toewijzing per week (vorige week, huidige week en de komende 3 weken). Klik in een veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en NL-feestdagen en kan niet worden bewerkt.</p>
               <table class="table" style="margin:0">
                 <thead><tr>
                   <th>Project</th>
                   <th>Uren door ${escapeHtml(firstName)}</th><th>Resterend</th><th>Totaal</th><th>Ingepland</th>
-                  ${futureWeeks.map((w, i) => `<th style="${i === 0 ? SEP + '; ' : ''}padding:8px 3px" title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
+                  ${futureWeeks.map((w, i) => `<th style="${w === thisMonIso ? SEP + '; ' : ''}padding:8px 3px" title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
                 </tr></thead>
                 <tbody>
                   ${rowsHtml}
@@ -671,7 +672,7 @@
                       const entry = overigData[w] || {};
                       const h = entry.hours > 0 ? entry.hours : '';
                       const note = entry.note || '';
-                      const sep = i === 0 ? SEP + '; ' : '';
+                      const sep = w === thisMonIso ? SEP + '; ' : '';
                       return `<td style="${sep}padding:6px 3px">
                         <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:64px; display:block; margin-bottom:.2rem">
                         <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:64px; display:block; font-size:.75rem; padding:.2rem .35rem">
@@ -707,14 +708,14 @@
             }).filter(Boolean).join('');
             const vacTable = vacRows
               ? `<table class="table" style="margin:0 0 .75rem">
-                  <thead><tr><th>Van</th><th>Tot</th><th>Label</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
+                  <thead><tr><th>Van</th><th>Tot en met</th><th>Label</th>${isAdmin ? '<th></th>' : ''}</tr></thead>
                   <tbody>${vacRows}</tbody>
                 </table>`
               : `<p class="subtle" style="margin:0 0 .75rem">Geen geplande vakantie.</p>`;
             const addForm = isAdmin ? `
               <div style="display:flex; flex-wrap:wrap; gap:.5rem; align-items:flex-end">
                 <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Van</span><input type="date" data-vac-start="${e.id}" style="width:auto"></label>
-                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Tot</span><input type="date" data-vac-end="${e.id}" style="width:auto"></label>
+                <label style="margin:0; flex:0 0 auto"><span class="subtle" style="font-size:.75rem">Tot en met</span><input type="date" data-vac-end="${e.id}" style="width:auto"></label>
                 <label style="margin:0; flex:1 1 200px"><span class="subtle" style="font-size:.75rem">Label (optioneel)</span><input type="text" data-vac-label="${e.id}" placeholder="bv. zomervakantie"></label>
                 <button class="btn btn-ghost" type="button" data-add-vac="${e.id}">+ Vakantie toevoegen</button>
               </div>` : '';
