@@ -127,10 +127,9 @@
     prevWeekMondayIso = dateToIso(prevMon);
     prevWeekSundayIso = dateToIso(prevSun);
 
-    const [projResp, settingsResp, actualResp] = await Promise.all([
+    const [projResp, settingsResp] = await Promise.all([
       apiGet('/api/projects?planning_view=1'),
       apiGet('/api/admin/settings').catch(() => ({ settings: { employee_capacities: {}, employee_vacations: {}, dashboard_planning_employees: [], planning_employees: [] } })),
-      apiGet(`/api/moneybird/time_entries?since=${prevWeekMondayIso}`).catch(() => { actualLoadFailed = true; return { time_entries: [] }; }),
     ]);
 
     projects = projResp.projects;
@@ -140,8 +139,6 @@
     dashboardEmps = new Set(settingsResp.settings.dashboard_planning_employees || []);
     planningEmps = new Set(settingsResp.settings.planning_employees || []);
 
-    actualEntries = Array.isArray(actualResp.time_entries) ? actualResp.time_entries : [];
-    actualCoverageSince = actualResp.coverage_since || null;
     trackedByMbId = new Map(
       projects.filter((p) => p.moneybird_project_id).map((p) => [String(p.moneybird_project_id), p])
     );
@@ -487,7 +484,7 @@
     }
 
     const today = todayIso();
-    c.innerHTML = planVsActualSection(shown) + shown.map((e) => {
+    c.innerHTML = shown.map((e) => {
       const order = { in_progress: 0, recurring: 1, future: 2, on_hold: 3 };
       const rows = [...e.rows].sort((a, b) => (order[a.project.status] ?? 9) - (order[b.project.status] ?? 9));
       const cap = Number(capacities[e.id]) || 0;
