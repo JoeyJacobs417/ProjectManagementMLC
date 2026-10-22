@@ -15,6 +15,7 @@
 </main>
 <script type="module">
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, fmtEuro } from '/app.js';
+  import { loadProjectsForMonth, computeRealizedBreakdown } from '/realized.js';
   const me = await renderTopbar('/omzet.html');
   const isAdmin = me?.role === 'admin';
   const content = document.getElementById('content');
@@ -65,6 +66,98 @@
     entries = Array.isArray(resp.settings?.manual_revenue) ? resp.settings.manual_revenue.slice() : entries;
   }
 
+  // ── Uitsplitsing "Reeds omgezet" ─────────────────────────────
+  let bdMonth = currentMonthIso();
+  const bdCache = new Map(); // maand -> projecten
+  const fmtH = (h) => `${(Number(h) || 0).toFixed(1).replace('.', ',')} u`;
+
+  function isoToday() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  async function renderBreakdown() {
+    const el = document.getElementById('breakdown');
+    if (!el) return;
+    const month = bdMonth;
+    el.innerHTML = '<p class="subtle">Laden…</p>';
+    let projects;
+    try {
+      if (!bdCache.has(month)) bdCache.set(month, await loadProjectsForMonth(month));
+      projects = bdCache.get(month);
+    } catch (err) {
+      el.innerHTML = `<p class="subtle">Uren laden mislukt: ${escapeHtml(err.message || String(err))}</p>`;
+      return;
+    }
+    if (month !== bdMonth) return; // inmiddels andere maand gekozen
+
+    const result = computeRealizedBreakdown(projects, month, isoToday());
+    const people = new Map(); // id -> { name, hours, revenue, lines, manual }
+    const person = (id, fallback) => {
+      const k = String(id);
+      if (!people.has(k)) people.set(k, { name: empName(k, fallback), hours: 0, revenue: 0, lines: [], manual: [] });
+      return people.get(k);
+    };
+    for (const [id, r] of result) {
+      const pr = person(id, r.name);
+      pr.hours = r.hours; pr.revenue = r.revenue; pr.lines = r.lines;
+    }
+    for (const m of entries) {
+      if (m.month !== month) continue;
+      const amount = Number(m.amount) || 0;
+      if (amount <= 0) continue;
+      person(m.moneybird_user_id, m.employee_name).manual.push({ description: m.description || '', amount });
+    }
+
+    const rows = Array.from(people.values()).map((pr) => {
+      const manualTotal = pr.manual.reduce((a, x) => a + x.amount, 0);
+      return { ...pr, manualTotal, total: pr.revenue + manualTotal };
+    }).filter((r) => r.lines.length || r.manual.length)
+      .sort((a, b) => b.total - a.total);
+
+    if (!rows.length) {
+      el.innerHTML = `<p class="subtle">Geen geschreven uren of handmatige omzet in ${escapeHtml(monthLabel(month))}.</p>`;
+      return;
+    }
+
+    const grand = rows.reduce((a, r) => a + r.total, 0);
+    const grandH = rows.reduce((a, r) => a + r.hours, 0);
+    el.innerHTML = rows.map((r) => {
+      const lines = r.lines.slice().sort((a, b) => b.revenue - a.revenue || b.written - a.written);
+      const lineRows = lines.map((l) => `
+        <tr>
+          <td>${escapeHtml(l.project_name || '')}</td>
+          <td style="text-align:right">${l.rate > 0 ? fmtEuro(l.rate) : '—'}</td>
+          <td style="text-align:right">${fmtH(l.written)}</td>
+          <td style="text-align:right">${fmtH(l.counted)}</td>
+          <td style="text-align:right"><strong>${l.revenue > 0 ? fmtEuro(l.revenue) : '—'}</strong></td>
+          <td class="subtle">${escapeHtml(l.note || '')}</td>
+        </tr>`).join('');
+      const manualRows = r.manual.map((x) => `
+        <tr>
+          <td>${escapeHtml(x.description || 'Handmatige omzetpost')} <span class="subtle">(handmatig)</span></td>
+          <td></td><td></td><td></td>
+          <td style="text-align:right"><strong>${fmtEuro(x.amount)}</strong></td>
+          <td class="subtle">Fixed price, geen uren</td>
+        </tr>`).join('');
+      return `
+        <details class="card-static" style="margin-bottom:.5rem; padding:.6rem 1rem">
+          <summary style="cursor:pointer; display:flex; justify-content:space-between; gap:1rem">
+            <span><strong>${escapeHtml(r.name)}</strong></span>
+            <span><strong>${fmtEuro(r.total)}</strong>${r.hours > 0 ? ` <span class="subtle">(${fmtH(r.hours)})</span>` : ''}${r.manualTotal > 0 ? ` <span class="subtle">waarvan ${fmtEuro(r.manualTotal)} handmatig</span>` : ''}</span>
+          </summary>
+          <table class="table" style="margin:.5rem 0 0">
+            <thead><tr><th>Project</th><th style="text-align:right">Tarief</th><th style="text-align:right">Geschreven</th><th style="text-align:right">Telt mee</th><th style="text-align:right">Omzet</th><th>Toelichting</th></tr></thead>
+            <tbody>${lineRows}${manualRows}</tbody>
+          </table>
+        </details>`;
+    }).join('') + `
+      <div style="display:flex; justify-content:space-between; padding:.6rem 1rem; border-top:2px solid var(--border); margin-top:.5rem">
+        <strong>Totaal ${escapeHtml(monthLabel(month))}</strong>
+        <span><strong>${fmtEuro(grand)}</strong> <span class="subtle">(${fmtH(grandH)} uit uren)</span></span>
+      </div>`;
+  }
+
   function render() {
     const empOptions = employees.length
       ? employees.map((e) => `<option value="${escapeHtml(String(e.id))}">${escapeHtml(e.name || '')}</option>`).join('')
@@ -90,6 +183,18 @@
     const total = entries.reduce((a, e) => a + (Number(e.amount) || 0), 0);
 
     content.innerHTML = `
+      <div class="card-static" style="margin-bottom:1.5rem">
+        <div style="display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; justify-content:space-between">
+          <h3 style="margin:0">Opbouw “Reeds omgezet” per medewerker</h3>
+          <label style="display:flex; flex-direction:row; align-items:center; gap:.5rem; margin:0; font-weight:500">
+            Maand:
+            <input type="month" id="bdMonth" value="${escapeHtml(bdMonth)}" style="width:auto">
+          </label>
+        </div>
+        <p class="subtle" style="margin:.5rem 0 1rem; font-size:.85rem">Dezelfde berekening als de kolom <strong>Reeds omgezet</strong> op het dashboard: geschreven uren in Moneybird (t/m vandaag) × uurtarief, alleen op projecten met uurtarief en zolang het beschikbare aantal uren nog niet is bereikt (bij uurtje-factuurtje tellen alle uren), plus de handmatige omzetposten hieronder. Klik op een medewerker voor de uitsplitsing per project.</p>
+        <div id="breakdown"><p class="subtle">Laden…</p></div>
+      </div>
+
       <div class="card-static" style="margin-bottom:1.5rem">
         <h3 style="margin-top:0">Omzetpost toevoegen</h3>
         <form id="addForm" class="form">
@@ -137,6 +242,10 @@
       </div>`;
 
     document.getElementById('addForm').addEventListener('submit', onAdd);
+    document.getElementById('bdMonth').addEventListener('change', (ev) => {
+      if (/^\d{4}-\d{2}$/.test(ev.target.value)) { bdMonth = ev.target.value; renderBreakdown(); }
+    });
+    renderBreakdown();
     content.querySelectorAll('button[data-del]').forEach((btn) => {
       btn.addEventListener('click', () => onDelete(btn.getAttribute('data-del')));
     });

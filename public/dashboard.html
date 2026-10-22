@@ -44,6 +44,7 @@
 </main>
 <script type="module">
   import { apiGet, apiSend, renderTopbar, toast, escapeHtml, statusLabel, deadlineBadge, daysFromNow, fmtEuro, isDutchHoliday } from '/app.js';
+  import { loadProjectsForMonth, computeRealizedBreakdown } from '/realized.js';
   const me = await renderTopbar('/dashboard.html');
   const isAdmin = me?.role === 'admin';
 
@@ -127,36 +128,8 @@
 
   async function ensureProjectsForMonth(monthIso) {
     if (loadedMonthKey === monthIso && projectsWithEntries) return projectsWithEntries;
-    const r = await apiGet(`/api/projects?with_time_entries=1&time_entries_in_month=${encodeURIComponent(monthIso)}`);
-    const projectsList = r.projects;
-
-    // De uren per project (dagelijkse sync) kunnen achterlopen of ontbreken. De Moneybird-cache
-    // wordt wel betrouwbaar ververst; die gebruiken we voor de uren in de gekozen maand zolang
-    // de cache die maand volledig dekt. Alleen gekoppelde projecten (met uurtarief) tellen mee,
-    // dus interne uren (Indirect, Marketing, Support) blijven buiten de omzet.
-    try {
-      const monthStart = `${monthIso}-01`;
-      const cacheResp = await apiGet(`/api/moneybird/time_entries?since=${encodeURIComponent(monthStart)}`);
-      const covered = !cacheResp.coverage_since || cacheResp.coverage_since <= monthStart;
-      if (covered && Array.isArray(cacheResp.time_entries)) {
-        const byMb = new Map();
-        for (const e of cacheResp.time_entries) {
-          if (!e.moneybird_project_id || !String(e.started_at || '').startsWith(monthIso)) continue;
-          const k = String(e.moneybird_project_id);
-          if (!byMb.has(k)) byMb.set(k, []);
-          byMb.get(k).push(e);
-        }
-        for (const p of projectsList) {
-          if (!p.moneybird_project_id) continue;
-          const fresh = byMb.get(String(p.moneybird_project_id)) || [];
-          const storedHours = (p.time_entries || []).reduce((a, e) => a + (Number(e.hours) || 0), 0);
-          const freshHours = fresh.reduce((a, e) => a + (Number(e.hours) || 0), 0);
-          // Cache is leidend voor de maand; totaal-verbruik corrigeren met het verschil.
-          p.time_entries = fresh;
-          p.hours_used = Math.max(0, (Number(p.hours_used) || 0) + (freshHours - storedHours));
-        }
-      }
-    } catch (err) { /* cache niet beschikbaar: terugvallen op de opgeslagen uren per project */ }
+    // Zie /realized.js: uren per project + correctie met de Moneybird-cache.
+    const projectsList = await loadProjectsForMonth(monthIso);
 
     projectsWithEntries = projectsList;
     loadedMonthKey = monthIso;
@@ -166,44 +139,12 @@
   // Gemiddeld uurtarief voor de potentiele omzet-kolom.
   const AVG_HOURLY_RATE = 145;
 
-  // Bereken per medewerker hoeveel uur DECLARABEL in de maand is gewerkt + bijbehorende omzet.
-  // Cap per project: voor niet-uurtje-factuurtje stoppen we bij available_hours;
-  // voor uurtje-factuurtje tellen alle uren.
+  // Reeds omgezet per medewerker: zie computeRealizedBreakdown in /realized.js (zelfde berekening
+  // als de uitsplitsing op de pagina Omzet).
   function computeRealizedForMonth(projects, monthIso, todayIso) {
     const out = new Map();
-    for (const p of projects) {
-      const rate = Number(p.hourly_rate) || 0;
-      if (rate <= 0) continue;
-      const entries = (p.time_entries || []).filter((e) => {
-        if (!e.started_at) return false;
-        const day = String(e.started_at).slice(0, 10);
-        return day.startsWith(monthIso) && day <= todayIso;
-      });
-      if (entries.length === 0) continue;
-      const hoursInMonth = entries.reduce((a, e) => a + (Number(e.hours) || 0), 0);
-      if (hoursInMonth <= 0) continue;
-      const hoursTotal = Number(p.hours_used) || 0;
-      const hoursBefore = Math.max(0, hoursTotal - hoursInMonth);
-      let declarableInMonth;
-      if (p.is_hourly_billing) {
-        declarableInMonth = hoursInMonth;
-      } else {
-        const cap = Math.max(0, (Number(p.available_hours) || 0) - hoursBefore);
-        declarableInMonth = Math.min(cap, hoursInMonth);
-      }
-      if (declarableInMonth <= 0) continue;
-      const byMember = new Map();
-      for (const e of entries) {
-        if (!e.user_moneybird_id) continue;
-        byMember.set(e.user_moneybird_id, (byMember.get(e.user_moneybird_id) || 0) + (Number(e.hours) || 0));
-      }
-      for (const [memberId, memberHours] of byMember) {
-        const memberDeclarable = (memberHours / hoursInMonth) * declarableInMonth;
-        const cur = out.get(memberId) || { hours: 0, revenue: 0 };
-        cur.hours += memberDeclarable;
-        cur.revenue += memberDeclarable * rate;
-        out.set(memberId, cur);
-      }
+    for (const [id, r] of computeRealizedBreakdown(projects, monthIso, todayIso)) {
+      if (r.revenue > 0 || r.hours > 0) out.set(id, { hours: r.hours, revenue: r.revenue });
     }
     return out;
   }
