@@ -241,7 +241,6 @@ export async function renderTopbar(activePath) {
   ];
   if (isAdmin) links.push({ href: '/omzet.html', label: 'Omzet' });
   if (isAdmin) links.push({ href: '/admin-settings.html', label: 'Instellingen' });
-  links.push({ href: '/reports.html', label: 'Rapportages' });
   const topbar = document.getElementById('topbar');
   if (topbar) {
     topbar.innerHTML = `
