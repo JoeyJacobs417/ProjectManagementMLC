@@ -127,7 +127,7 @@ export default async function handler(req, res) {
       }
 
       // ─── Pass 1: incrementele bulk-cache (gevuld door cron, 7d per run) ──
-      // Wordt elke nacht aangevuld; na ~5 nachten 35 dagen historie compleet.
+      // Wordt elke nacht aangevuld; na ~9 nachten 60 dagen historie compleet.
       // ALTIJD instant. Toont entries op zowel gekoppelde als ongekoppelde
       // Moneybird-projecten — exact wat de medewerker-pagina nodig heeft.
       const recent = await getRecentMoneybirdEntries();
