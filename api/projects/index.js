@@ -254,6 +254,11 @@ export default async function handler(req, res) {
         if (!wantsTimeEntries) {
           delete result.time_entries;
         } else if (monthFilter) {
+          // Uren vóór de gekozen maand: nodig om bij een eerdere maand te bepalen hoeveel budget
+          // er toen nog over was (hours_used bevat ook uren van latere maanden).
+          result.hours_before_month = (result.time_entries || []).reduce((a, e) => (
+            e.started_at && String(e.started_at).slice(0, 7) < monthFilter ? a + (Number(e.hours) || 0) : a
+          ), 0);
           // Filter time_entries op opgegeven maand voor de dashboard-forecast
           result.time_entries = (result.time_entries || []).filter((e) => {
             if (!e.started_at) return false;

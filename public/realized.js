@@ -71,8 +71,11 @@ export function computeRealizedBreakdown(projects, monthIso, todayIso) {
       declarableInMonth = hoursInMonth;
       note = 'Uurtje-factuurtje — alle uren tellen';
     } else {
-      const hoursTotal = Number(p.hours_used) || 0;
-      const hoursBefore = Math.max(0, hoursTotal - hoursInMonth);
+      // Uren vóór deze maand: van de server (klopt ook voor eerdere maanden); anders afgeleid
+      // uit het totaal-verbruik (alleen juist voor de lopende maand).
+      const hoursBefore = Number.isFinite(p.hours_before_month)
+        ? p.hours_before_month
+        : Math.max(0, (Number(p.hours_used) || 0) - hoursInMonth);
       const available = Number(p.available_hours) || 0;
       const cap = Math.max(0, available - hoursBefore);
       declarableInMonth = Math.min(cap, hoursInMonth);
