@@ -301,7 +301,8 @@
     const incomplete = resp.source === 'cache-partial' || resp.source === 'local-tracked-only' || (resp.coverage_since && resp.coverage_since > sinceIso);
     const warn = incomplete ? `
       <p style="color:#b45309; font-weight:600; margin:0 0 .5rem; font-size:.85rem">⚠ De Moneybird-cache dekt nog niet alle ${WEEKS} weken${resp.coverage_since ? ` (beschikbaar vanaf ${escapeHtml(shortDate(resp.coverage_since))})` : ''}, dus gewerkte uren in oudere weken kunnen onvolledig zijn.</p>
-      <button class="btn btn-ghost" id="workedWarm" type="button" style="margin-bottom:.75rem">⤓ Haal volledige Moneybird-uren op</button>` : '';
+      <button class="btn btn-ghost" id="workedWarm" type="button" style="margin-bottom:.75rem">⤓ Haal volledige Moneybird-uren op</button>`
+      : `<button class="btn btn-ghost" id="workedWarm" type="button" style="margin-bottom:.75rem" title="Haalt alle dagen van de afgelopen 8 weken opnieuw op, bv. als er uren achteraf zijn ingeschreven">↻ Uren opnieuw ophalen uit Moneybird</button>`;
     const legend = `<p class="subtle" style="font-size:.78rem; margin:0 0 .75rem">Per cel: <strong>gewerkt</strong> (Moneybird) boven, <em>gepland</em> eronder. Kleur:
       <span style="background:rgba(16,185,129,.2); padding:0 .35rem">op plan</span>
       <span style="background:rgba(245,158,11,.2); padding:0 .35rem">minder gewerkt</span>
@@ -322,7 +323,7 @@
         const projAct = weeks.map((w) => sum(r.list.map((x) => x.act.get(w) || 0)));
         const revPerWeek = weeks.map((w) => sum(r.list.map((x) => (x.plan.get(w) || 0) * x.rate)));
         const totPlan = weeks.map((_, i) => projPlan[i] + ov[i] + vac[i]);
-        const totAct = weeks.map((_, i) => projAct[i] + vac[i]);
+        const totAct = projAct; // = Moneybird-weektotaal (verlof dat als uren is geboekt zit er al in)
         const body = r.list
           .map((x) => ({ ...x, tp: sum(Array.from(x.plan.values())), ta: sum(Array.from(x.act.values())) }))
           .sort((a, b) => (b.ta + b.tp) - (a.ta + a.tp))
@@ -347,10 +348,10 @@
               <tr style="background:rgba(99,102,241,.06)"><td><strong>Overig</strong> <span class="subtle">(losse taakjes, alleen gepland)</span></td>
                 ${ov.map((h, i) => `<td style="${TD}" ${ovNote[i] ? `title="${escapeHtml(ovNote[i])}"` : ''}>${h > 0 ? r1(h) + (ovNote[i] ? ' ⓘ' : '') : dash}</td>`).join('')}
                 <td style="${TD}"><strong>${sum(ov) > 0 ? r1(sum(ov)) : dash}</strong></td></tr>
-              <tr style="background:rgba(245,158,11,.06)"><td><strong>Vakantie / feestdagen</strong></td>
+              <tr style="background:rgba(245,158,11,.06)"><td><strong>Vakantie / feestdagen</strong> <span class="subtle" style="font-size:.72rem">(volgens instellingen, telt alleen mee in gepland)</span></td>
                 ${vac.map((h) => `<td style="${TD}">${h > 0 ? r1(h) : dash}</td>`).join('')}
                 <td style="${TD}"><strong>${sum(vac) > 0 ? r1(sum(vac)) : dash}</strong></td></tr>
-              <tr style="background:var(--bg-soft)"><td><strong>Totaal</strong>${cap > 0 ? ` <span class="subtle">(capaciteit ${cap} u/wk)</span>` : ''}<br><span class="subtle" style="font-size:.72rem">gewerkt incl. vakantie · gepland incl. overig en vakantie</span></td>
+              <tr style="background:var(--bg-soft)"><td><strong>Totaal</strong>${cap > 0 ? ` <span class="subtle">(capaciteit ${cap} u/wk)</span>` : ''}<br><span class="subtle" style="font-size:.72rem">gewerkt = Moneybird-weektotaal · gepland incl. overig en vakantie</span></td>
                 ${totAct.map((a, i) => totCell(a, totPlan[i])).join('')}
                 <td style="${TD}"><strong>${r1(sum(totAct))}</strong><br><span class="subtle" style="font-size:.72rem">plan ${r1(sum(totPlan))}</span></td></tr>
               <tr><td><strong>Geplande omzet</strong></td>
