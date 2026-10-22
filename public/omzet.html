@@ -220,12 +220,18 @@
       return people.get(id);
     };
     const rowOf = (pr, key, name, rate) => {
-      if (!pr.rows.has(key)) pr.rows.set(key, { name, rate: 0, plan: new Map(), act: new Map() });
+      if (!pr.rows.has(key)) pr.rows.set(key, { key, name, rate: 0, plan: new Map(), act: new Map(), subs: new Map() });
       const r = pr.rows.get(key);
       if (rate > 0 && !r.rate) r.rate = rate;
       return r;
     };
     const add = (m, w, h) => m.set(w, (m.get(w) || 0) + h);
+    // Bij een samengevoegde categorie (Indirect / Ontwikkeling SaaS-platform) houden we de echte
+    // projecten bij, zodat de regel kan worden uitgeklapt.
+    const addSub = (row, subName, side, w, h) => {
+      if (!row.subs.has(subName)) row.subs.set(subName, { name: subName, plan: new Map(), act: new Map() });
+      add(row.subs.get(subName)[side], w, h);
+    };
 
     for (const p of data.projects) {
       const cat = categorize(p.name);
@@ -235,7 +241,9 @@
         const h = Number(a.hours) || 0;
         if (h <= 0) continue;
         const pr = person(String(a.moneybird_user_id));
-        add(rowOf(pr, key, cat ? cat.label : p.name, cat ? 0 : Number(p.hourly_rate) || 0).plan, a.week_start, h);
+        const row = rowOf(pr, key, cat ? cat.label : p.name, cat ? 0 : Number(p.hourly_rate) || 0);
+        add(row.plan, a.week_start, h);
+        if (cat) addSub(row, p.name, 'plan', a.week_start, h);
       }
     }
     for (const e of (resp.time_entries || [])) {
@@ -252,7 +260,9 @@
       const cat = categorize(baseName);
       const key = cat ? cat.key : (mbId ? `mb:${mbId}` : '__none__');
       const pr = person(id, e.user_name);
-      add(rowOf(pr, key, cat ? cat.label : baseName, 0).act, wk, h);
+      const row = rowOf(pr, key, cat ? cat.label : baseName, 0);
+      add(row.act, wk, h);
+      if (cat) addSub(row, baseName, 'act', wk, h);
     }
     for (const [empId, byWeek] of Object.entries(overig)) {
       for (const w of weeks) if (Number((byWeek[w] || {}).hours) > 0) person(String(empId));
@@ -324,12 +334,29 @@
         const revPerWeek = weeks.map((w) => sum(r.list.map((x) => (x.plan.get(w) || 0) * x.rate)));
         const totPlan = weeks.map((_, i) => projPlan[i] + ov[i] + vac[i]);
         const totAct = projAct; // = Moneybird-weektotaal (verlof dat als uren is geboekt zit er al in)
+        const subCell = (act, plan) => (act > 0 || plan > 0)
+          ? `<td style="${TD}; font-size:.9rem">${act > 0 ? r1(act) : '0'}${plan > 0 ? `<br><span class="subtle" style="font-size:.72rem">plan ${r1(plan)}</span>` : ''}</td>`
+          : `<td style="${TD}">${dash}</td>`;
         const body = r.list
           .map((x) => ({ ...x, tp: sum(Array.from(x.plan.values())), ta: sum(Array.from(x.act.values())) }))
           .sort((a, b) => (b.ta + b.tp) - (a.ta + a.tp))
-          .map((x) => `<tr><td>${escapeHtml(x.name)}${x.rate > 0 ? ` <span class="subtle">(${fmtEuro(x.rate)}/u)</span>` : ''}</td>
-            ${weeks.map((w) => cell(x.act.get(w) || 0, x.plan.get(w) || 0, w === thisWeek)).join('')}
-            <td style="${TD}"><strong>${r1(x.ta)}</strong><br><span class="subtle" style="font-size:.72rem">plan ${r1(x.tp)}</span></td></tr>`).join('');
+          .map((x) => {
+            const rid = `${r.id}:${x.key}`;
+            const expandable = x.subs.size > 0;
+            const main = `<tr${expandable ? ` data-toggle="${escapeHtml(rid)}" style="cursor:pointer" title="Klik om de onderliggende Moneybird-projecten te tonen"` : ''}>
+              <td>${expandable ? '<span class="toggle-arrow" style="display:inline-block; width:1rem; color:var(--muted,#6b7280)">▸</span>' : ''}${escapeHtml(x.name)}${x.rate > 0 ? ` <span class="subtle">(${fmtEuro(x.rate)}/u)</span>` : ''}${expandable ? ` <span class="subtle" style="font-size:.75rem">(${x.subs.size} ${x.subs.size === 1 ? 'project' : 'projecten'})</span>` : ''}</td>
+              ${weeks.map((w) => cell(x.act.get(w) || 0, x.plan.get(w) || 0, w === thisWeek)).join('')}
+              <td style="${TD}"><strong>${r1(x.ta)}</strong><br><span class="subtle" style="font-size:.72rem">plan ${r1(x.tp)}</span></td></tr>`;
+            if (!expandable) return main;
+            const subs = Array.from(x.subs.values())
+              .map((sb) => ({ ...sb, tp: sum(Array.from(sb.plan.values())), ta: sum(Array.from(sb.act.values())) }))
+              .sort((a, b) => (b.ta + b.tp) - (a.ta + a.tp))
+              .map((sb) => `<tr data-sub-of="${escapeHtml(rid)}" style="display:none; background:var(--bg-soft)">
+                <td style="padding-left:2rem" class="subtle">↳ ${escapeHtml(sb.name)}</td>
+                ${weeks.map((w) => subCell(sb.act.get(w) || 0, sb.plan.get(w) || 0)).join('')}
+                <td style="${TD}; font-size:.9rem">${r1(sb.ta)}${sb.tp > 0 ? `<br><span class="subtle" style="font-size:.72rem">plan ${r1(sb.tp)}</span>` : ''}</td></tr>`).join('');
+            return main + subs;
+          }).join('');
         const totCell = (a, p, w) => {
           const over = cap > 0 && p > cap + 0.01;
           return `<td style="${TD}; ${over ? 'color:#b91c1c' : ''}"><strong>${a > 0 ? r1(a) : '0'}</strong><br><span class="subtle" style="font-size:.72rem">plan ${p > 0 ? r1(p) : '0'}${cap > 0 ? ` / ${cap}` : ''}</span></td>`;
@@ -362,6 +389,26 @@
           </div>
         </details>`;
       }).join('');
+    }
+
+    // Uitklappen van samengevoegde categorieën (Indirect, Ontwikkeling SaaS-platform).
+    if (!el.dataset.toggleBound) {
+      el.dataset.toggleBound = '1';
+      el.addEventListener('click', (ev) => {
+        const tr = ev.target.closest && ev.target.closest('tr[data-toggle]');
+        if (!tr || !el.contains(tr)) return;
+        const id = tr.getAttribute('data-toggle');
+        const table = tr.closest('table');
+        let open = false;
+        table.querySelectorAll('tr[data-sub-of]').forEach((sub) => {
+          if (sub.getAttribute('data-sub-of') !== id) return;
+          const show = sub.style.display === 'none';
+          sub.style.display = show ? '' : 'none';
+          open = show;
+        });
+        const arrow = tr.querySelector('.toggle-arrow');
+        if (arrow) arrow.textContent = open ? '▾' : '▸';
+      });
     }
 
     const btn = document.getElementById('workedWarm');
