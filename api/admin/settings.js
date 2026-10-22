@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { requireUser, requireAdmin } from '../../lib/auth.js';
 import { getSettings, saveSettings } from '../../lib/db.js';
 import { sendProjectReport, DEFAULT_TEMPLATES } from '../../lib/notify.js';
+import { mergeLockedOverig } from '../../lib/planning-lock.js';
 
 const REPORT_PERIODS = ['off', 'weekly', 'monthly'];
 const VALID_TEMPLATE_KEYS = Object.keys(DEFAULT_TEMPLATES);
@@ -222,7 +223,8 @@ export default async function handler(req, res) {
     if (b.monthly_revenue_targets !== undefined) patch.monthly_revenue_targets = normalizeMonthlyRevenueTargets(b.monthly_revenue_targets);
     if (b.dashboard_planning_employees !== undefined) patch.dashboard_planning_employees = normalizeDashboardPlanningEmployees(b.dashboard_planning_employees);
     if (b.planning_employees !== undefined) patch.planning_employees = normalizeHiddenEmployees(b.planning_employees);
-    if (b.employee_overig !== undefined) patch.employee_overig = normalizeOverig(b.employee_overig);
+    // Weken in het verleden zijn vergrendeld (zie lib/planning-lock.js).
+    if (b.employee_overig !== undefined) patch.employee_overig = mergeLockedOverig((await getSettings()).employee_overig, normalizeOverig(b.employee_overig));
     if (b.manual_revenue !== undefined) patch.manual_revenue = normalizeManualRevenue(b.manual_revenue);
     const next = await saveSettings(patch);
     res.status(200).json({ settings: next });

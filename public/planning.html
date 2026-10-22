@@ -64,6 +64,14 @@
     d.setDate(d.getDate() + diff);
     return d;
   }
+  // Planningsweek: ma t/m vr de huidige week, vanaf zaterdag al de volgende week.
+  // Weken vóór deze maandag zijn vergrendeld (alleen-lezen). Zelfde regel als lib/planning-lock.js.
+  function planningMondayOf(date) {
+    const d = new Date(date); d.setHours(0, 0, 0, 0);
+    if (d.getDay() === 6) d.setDate(d.getDate() + 2);
+    else if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+    return mondayOf(d);
+  }
   function vacationDaysInRange(periods, startIso, endIso) {
     if (!periods || periods.length === 0) return 0;
     let count = 0;
@@ -123,7 +131,7 @@
 
     // Bereken het venster van de vorige (afgeronde) week: maandag t/m zondag.
     const thisMon = mondayOf(new Date());
-    const prevMon = new Date(thisMon); prevMon.setDate(prevMon.getDate() - 7);
+    const prevMon = planningMondayOf(new Date()); prevMon.setDate(prevMon.getDate() - 7);
     const prevSun = new Date(prevMon); prevSun.setDate(prevSun.getDate() + 6);
     prevWeekMondayIso = dateToIso(prevMon);
     prevWeekSundayIso = dateToIso(prevSun);
@@ -536,7 +544,7 @@
 
       // Vorige week + huidige week + komende 3 maandagen
       const todayDate = new Date(); todayDate.setHours(0,0,0,0);
-      const thisMon = mondayOf(todayDate);
+      const thisMon = planningMondayOf(todayDate);
       const futureWeeks = [];
       for (let i = -1; i < 4; i++) {
         const d = new Date(thisMon); d.setDate(d.getDate() + i * 7);
@@ -612,11 +620,11 @@
               const overigHrs = Number((overigData[w] || {}).hours) || 0;
               return [w, projectAllocSum.get(w) + vacHrs + overigHrs];
             }));
-            const currentMonIso = dateToIso(mondayOf(new Date()));
+            const currentMonIso = dateToIso(planningMondayOf(new Date()));
             const anyOver = cap > 0 && futureWeeks.some((w) => w >= currentMonIso && totalPerWeek.get(w) > cap + 0.01);
 
             const SEP = 'border-left:2px solid #cbd5e1';
-            const thisMonIso = dateToIso(mondayOf(new Date()));
+            const thisMonIso = dateToIso(planningMondayOf(new Date()));
 
             const rowsHtml = rows.map((row) => {
               const p = row.project;
@@ -634,6 +642,9 @@
                 : `<td style="${ingeplandOver ? 'color:#b45309;font-weight:600' : ''}">${ingepland > 0 ? ingepland.toFixed(1) + ' u' : '<span class="subtle">—</span>'}</td>`;
               const allocCells = futureWeeks.map((w, i) => {
                 const h = allocByWeek.get(w) || 0;
+                if (w < thisMonIso) {
+                  return `<td style="padding:6px 3px; background:var(--bg-soft)" title="Vergrendeld — alleen inzicht"><span style="display:inline-block; width:64px">${h > 0 ? h : '<span class="subtle">—</span>'}</span></td>`;
+                }
                 return `<td style="${w === thisMonIso ? SEP + '; ' : ''}padding:6px 3px"><input type="number" min="0" step="0.5" data-alloc="${encodeURIComponent(p.id)}|${e.id}|${w}" value="${h > 0 ? h : ''}" placeholder="0" style="width:64px"></td>`;
               }).join('');
               return `
@@ -667,12 +678,12 @@
 
             return `
               <h4 style="margin-top:1rem">Toegewezen projecten (In progress / Future / On hold / Recurring)</h4>
-              <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vijf rechterkolommen tonen de uren-toewijzing per week (vorige week, huidige week en de komende 3 weken). Klik in een veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en NL-feestdagen en kan niet worden bewerkt.</p>
+              <p class="subtle" style="margin:0 0 .5rem; font-size:.85rem">De vijf rechterkolommen tonen de uren-toewijzing per week (afgelopen week, huidige week en de komende 3 weken). Vanaf zaterdag springt de planning door naar de volgende week; de afgelopen week is dan vergrendeld (🔒) en alleen nog te bekijken — de historie van de laatste 8 weken staat op de pagina Omzet. Klik in een open veld om aan te passen — wordt automatisch opgeslagen. De vakantie-rij wordt automatisch gevuld op basis van geplande vakantie en NL-feestdagen en kan niet worden bewerkt.</p>
               <table class="table" style="margin:0">
                 <thead><tr>
                   <th>Project</th>
                   <th>Uren door ${escapeHtml(firstName)}</th><th>Resterend</th><th>Totaal</th><th>Ingepland</th>
-                  ${futureWeeks.map((w, i) => `<th style="${w === thisMonIso ? SEP + '; ' : ''}padding:8px 3px" title="Inplanning week van ${fmtDate(w)}">${fmtDateShort(w)}</th>`).join('')}
+                  ${futureWeeks.map((w, i) => `<th style="${w === thisMonIso ? SEP + '; ' : ''}padding:8px 3px" title="${w < thisMonIso ? 'Vergrendeld — alleen inzicht. Week van ' : 'Inplanning week van '}${fmtDate(w)}">${w < thisMonIso ? '🔒 ' : ''}${fmtDateShort(w)}</th>`).join('')}
                 </tr></thead>
                 <tbody>
                   ${rowsHtml}
@@ -695,6 +706,9 @@
                       const h = entry.hours > 0 ? entry.hours : '';
                       const note = entry.note || '';
                       const sep = w === thisMonIso ? SEP + '; ' : '';
+                      if (w < thisMonIso) {
+                        return `<td style="padding:6px 3px; background:var(--bg-soft)" title="Vergrendeld — alleen inzicht">${h !== '' ? h : '<span class="subtle">—</span>'}${note ? `<div class="subtle" style="font-size:.75rem">${escapeHtml(note)}</div>` : ''}</td>`;
+                      }
                       return `<td style="${sep}padding:6px 3px">
                         <input type="number" min="0" step="0.5" data-overig-hours="${e.id}|${w}" value="${h}" placeholder="0" style="width:64px; display:block; margin-bottom:.2rem">
                         <input type="text" data-overig-note="${e.id}|${w}" value="${escapeHtml(note)}" placeholder="notitie…" style="width:64px; display:block; font-size:.75rem; padding:.2rem .35rem">

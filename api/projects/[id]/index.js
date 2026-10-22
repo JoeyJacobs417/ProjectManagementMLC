@@ -17,6 +17,7 @@ import {
   deletePdfBlob,
 } from '../../../lib/db.js';
 import { diffProjectActivity, appendActivity, logActivity } from '../../../lib/activity.js';
+import { mergeLockedAllocations } from '../../../lib/planning-lock.js';
 
 const VALID_STATUSES = ['in_progress', 'on_hold', 'done', 'future', 'recurring'];
 const VALID_MODULES = ['PowerImprove', 'PowerClass', 'PowerText', 'PowerImage', 'PowerRelate', 'Project'];
@@ -337,7 +338,8 @@ export default async function handler(req, res) {
     if (b.contacts !== undefined) project.contacts = normalizeContacts(b.contacts);
     if (b.team !== undefined) project.team = normalizeTeam(b.team);
     if (b.team_allocations !== undefined) project.team_allocations = normalizeTeamAllocations(b.team_allocations);
-    if (b.weekly_allocations !== undefined) project.weekly_allocations = normalizeWeeklyAllocations(b.weekly_allocations);
+    // Weken in het verleden zijn vergrendeld (zie lib/planning-lock.js).
+    if (b.weekly_allocations !== undefined) project.weekly_allocations = mergeLockedAllocations(project.weekly_allocations, normalizeWeeklyAllocations(b.weekly_allocations));
     if (b.sentiment !== undefined) {
       const next = String(b.sentiment || '').toLowerCase();
       const val = VALID_SENTIMENTS.includes(next) ? next : '';
