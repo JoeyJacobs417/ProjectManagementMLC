@@ -174,11 +174,13 @@
     d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
     return d;
   }
-  // Zelfde samenvoeging als op de planning-pagina: "indirect…" en "support…" zijn categorieën.
+  // Zelfde samenvoeging als op de planning-pagina: "indirect…" en "…support…" zijn categorieën.
   function categorize(name) {
     const n = String(name || '').trim().toLowerCase();
     if (n.startsWith('indirect')) return { key: 'cat:indirect', label: 'Indirect' };
-    if (n.startsWith('support')) return { key: 'cat:saas', label: 'Ontwikkeling SaaS-platform' };
+    // Alle "support"-projecten (bv. "MLC - support Powerrelate", "MLC- support PowerSuite"): het woord
+    // "support" hoeft niet vooraan te staan, want ze beginnen met "MLC".
+    if (/\bsupport\b/.test(n)) return { key: 'cat:saas', label: 'PowerSuite ontwikkeling' };
     return null;
   }
   let histData = null;
@@ -226,7 +228,7 @@
       return r;
     };
     const add = (m, w, h) => m.set(w, (m.get(w) || 0) + h);
-    // Bij een samengevoegde categorie (Indirect / Ontwikkeling SaaS-platform) houden we de echte
+    // Bij een samengevoegde categorie (Indirect / PowerSuite ontwikkeling) houden we de echte
     // projecten bij, zodat de regel kan worden uitgeklapt.
     const addSub = (row, subName, side, w, h) => {
       if (!row.subs.has(subName)) row.subs.set(subName, { name: subName, plan: new Map(), act: new Map() });
@@ -391,7 +393,7 @@
       }).join('');
     }
 
-    // Uitklappen van samengevoegde categorieën (Indirect, Ontwikkeling SaaS-platform).
+    // Uitklappen van samengevoegde categorieën (Indirect, PowerSuite ontwikkeling).
     if (!el.dataset.toggleBound) {
       el.dataset.toggleBound = '1';
       el.addEventListener('click', (ev) => {
